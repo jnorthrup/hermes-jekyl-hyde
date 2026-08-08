@@ -32,6 +32,7 @@ _LOCK = threading.Lock()
 _TRIVIAL_PATTERNS = [
     re.compile(r"^\s*(thanks|thank you|ok|okay|k|sure|yep|no|yes|done|cool|nice|got it|hi|hello|hey)\s*[.!]?\s*$", re.IGNORECASE),
     re.compile(r"^\s*/\w+.*$", re.IGNORECASE),  # slash commands (e.g. /hyde status, /reset, /model)
+    re.compile(r"^\s*Review the conversation above.*", re.IGNORECASE),  # background skill/memory review turns
 ]
 _TRIVIAL_MAX_LEN = 12
 

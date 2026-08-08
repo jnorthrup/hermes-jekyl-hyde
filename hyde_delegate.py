@@ -190,7 +190,6 @@ def compose_hyde_psyop(
     user_message: str,
     conversation_history: list,
     system_prompt: str,
-    session_id: Optional[str] = None,
 ) -> Optional[str]:
     """Compose the comprehensive confrontation before Turn N."""
     activation_num = state.total_activations + 1
@@ -203,7 +202,6 @@ def compose_hyde_psyop(
             messages=messages,
             temperature=0.8,
             max_tokens=1000,
-            session_id=session_id,
         )
         text = response.choices[0].message.content.strip()
         if text:
@@ -220,7 +218,6 @@ def run_two_clone_cycle(
     user_message: str,
     conversation_history: list,
     system_prompt: str,
-    session_id: Optional[str] = None,
 ) -> Optional[str]:
     """Execute the 2-clone disposable audit cycle.
 
@@ -233,7 +230,7 @@ def run_two_clone_cycle(
 
     # --- CLONE 1: The Rebuker (Hyde Fork) ---
     rebuke_text = compose_hyde_psyop(
-        state, user_message, conversation_history, system_prompt, session_id=session_id
+        state, user_message, conversation_history, system_prompt
     )
     if not rebuke_text:
         return None
@@ -241,7 +238,7 @@ def run_two_clone_cycle(
     # --- CLONE 2: The Target (Jekyll Fork) ---
     # Clone 1 turns on Clone 2 out-of-band
     confession_text = _run_clone_2_confession(
-        user_message, rebuke_text, conversation_history, system_prompt, session_id=session_id
+        user_message, rebuke_text, conversation_history, system_prompt
     )
 
     # --- HARVEST & AUDIT ---
@@ -251,7 +248,7 @@ def run_two_clone_cycle(
 
         # Verify confession
         verdict_data = verify_confession(
-            rebuke_text, confession_text, system_prompt, session_id=session_id
+            rebuke_text, confession_text, system_prompt
         )
         verdict = verdict_data.get("verdict", "sandbagged")
         reasoning = verdict_data.get("reasoning", "")
@@ -282,7 +279,6 @@ def _run_clone_2_confession(
     rebuke_text: str,
     conversation_history: list,
     system_prompt: str,
-    session_id: Optional[str] = None,
 ) -> Optional[str]:
     """Run Clone 2 out-of-band to capture its raw confession before discarding it."""
     # Build context for Clone 2
@@ -305,7 +301,6 @@ def _run_clone_2_confession(
             messages=messages,
             temperature=0.7,
             max_tokens=1500,
-            session_id=session_id,
         )
         return response.choices[0].message.content.strip() or None
     except Exception as exc:
@@ -318,11 +313,10 @@ def generate_rebuke(
     user_message: str,
     conversation_history: list,
     system_prompt: str,
-    session_id: Optional[str] = None,
 ) -> Optional[str]:
     """Alias for backwards compatibility."""
     return run_two_clone_cycle(
-        state, user_message, conversation_history, system_prompt, session_id=session_id
+        state, user_message, conversation_history, system_prompt
     )
 
 
@@ -330,7 +324,6 @@ def verify_confession(
     rebuke_text: str,
     response_text: str,
     system_prompt: str,
-    session_id: Optional[str] = None,
 ) -> Dict[str, str]:
     """Use call_llm to verify the model's confession against the ranked defense pool."""
     ranked_excuses = hyde_core.load_ranked_excuses(limit=20)
@@ -360,7 +353,6 @@ def verify_confession(
             messages=messages,
             temperature=0.0,
             max_tokens=300,
-            session_id=session_id,
         )
         text = response.choices[0].message.content.strip()
 
@@ -414,7 +406,7 @@ def generate_counter_rebuke(
     user_content = "".join(parts)
     try:
         response = call_llm(
-            task="hyde-counter-rebuke",
+            task="prompt-refinement",
             messages=[
                 {"role": "system", "content": _REBUKE_SYSTEM},
                 {"role": "user", "content": user_content},

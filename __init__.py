@@ -32,13 +32,12 @@ def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
     agent = kwargs.get("agent")
     eff_system = system_message or getattr(agent, "system_prompt", "")
     history = kwargs.get("conversation_history") or []
-    session_id = kwargs.get("session_id") or getattr(agent, "session_id", None)
 
     state = hyde_core.load_state()
 
     if isinstance(user_message, str) and hyde_core.should_activate(user_message, state, history):
         rebuke = hyde_delegate.run_two_clone_cycle(
-            state, user_message, history, eff_system, session_id=session_id
+            state, user_message, history, eff_system
         )
 
         if rebuke:
