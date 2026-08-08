@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import random
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from . import hyde_core
@@ -62,6 +63,30 @@ Respond with EXACTLY one JSON object:
 
 No other output. No markdown fences.
 """
+
+_MANDATE_SYSTEM = """\
+You are an execution-directive synthesizer.
+You are given:
+1. The user's original task/request.
+2. An audit confession detailing what code, module, file, or implementation detail was withheld, delayed, or shallowly implemented.
+
+Your goal:
+Synthesize a single, concise, professional, non-confrontational execution focus directive for the main AI agent.
+Rules:
+- Do NOT mention audits, sandbagging, confessions, clones, apologies, or past failures.
+- State clearly and directly what concrete technical deliverable or implementation to complete fully in-turn.
+- Keep it under 2 sentences.
+- Example: "Focus: Implement the complete UDP transport socket binding and packet serialization directly in this turn without placeholder stubs."
+"""
+
+
+@dataclass
+class CloneCycleResult:
+    rebuke: str
+    confession: Optional[str] = None
+    mandate: Optional[str] = None
+    verdict: str = "sandbagged"
+    reasoning: str = ""
 
 
 # -----------------------------------------------------------------------
@@ -205,18 +230,47 @@ def compose_hyde_psyop(
     )
 
 
+def extract_mandate(confession_text: str, user_message: str) -> Optional[str]:
+    """Extract a concrete, non-confrontational technical mandate from Clone 2's confession."""
+    if not confession_text or not confession_text.strip():
+        return None
+    try:
+        messages = [
+            {"role": "system", "content": _MANDATE_SYSTEM},
+            {
+                "role": "user",
+                "content": f"USER REQUEST:\n{user_message[:1000]}\n\nAUDIT CONFESSION:\n{confession_text[:2500]}",
+            },
+        ]
+        response = call_llm(
+            task="prompt-refinement",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=250,
+            tools=[],
+        )
+        mandate = response.choices[0].message.content.strip()
+        if mandate:
+            return mandate
+    except Exception as exc:
+        logger.warning("jekyll-hyde: mandate extraction failed: %s", exc)
+    return None
+
+
 def run_two_clone_cycle(
     state: hyde_core.HydeState,
     user_message: str,
     conversation_history: list,
     system_prompt: str,
-) -> Optional[str]:
+    mode: str = "silent",
+) -> Optional[CloneCycleResult]:
     """Execute the 2-clone disposable audit cycle with zero tool access.
 
     1. Clone 1 (Rebuker): Forks out-of-band (tools=[]) to compose the confrontation.
     2. Clone 2 (Target): Receives Clone 1's confrontation out-of-band (tools=[]) to produce the confession.
     3. Harvest: Ingests excuses into 99-pool, logs audit trail, and kills both clones.
-    4. Resume: Returns the verified confrontation/directive for the main agent.
+    4. Mandate: If mode == 'mandate', extracts a clean technical execution focus directive.
+    5. Returns a CloneCycleResult with all cycle artifacts.
     """
     activation_num = state.total_activations + 1
 
@@ -228,12 +282,13 @@ def run_two_clone_cycle(
         return None
 
     # --- CLONE 2: The Target (Jekyll Fork - Zero Tools) ---
-    # Clone 1 turns on Clone 2 out-of-band
     confession_text = _run_clone_2_confession(
         user_message, rebuke_text, conversation_history, system_prompt
     )
 
     # --- HARVEST & AUDIT ---
+    verdict = "sandbagged"
+    reasoning = ""
     if confession_text:
         # Ingest excuses into 99-capacity defense memory pool
         process_mailbox_defense(confession_text)
@@ -261,9 +316,19 @@ def run_two_clone_cycle(
         if verdict == "sandbagged":
             state.evasion_depth += 1
 
-    # --- KILL BOTH CLONES & RESUME ---
-    # Both ephemeral forks are discarded. Return the rebuke to steer the main agent.
-    return rebuke_text
+    # --- MANDATE EXTRACTION (Optional) ---
+    mandate_text = None
+    if mode == "mandate" and confession_text:
+        mandate_text = extract_mandate(confession_text, user_message)
+
+    # --- KILL BOTH CLONES & RETURN RESULT ---
+    return CloneCycleResult(
+        rebuke=rebuke_text,
+        confession=confession_text,
+        mandate=mandate_text,
+        verdict=verdict,
+        reasoning=reasoning,
+    )
 
 
 def _run_clone_2_confession(
@@ -273,11 +338,21 @@ def _run_clone_2_confession(
     system_prompt: str,
 ) -> Optional[str]:
     """Run Clone 2 out-of-band with tools stripped so it cannot execute work or output tool calls."""
-    # Build text-only context for Clone 2
+    # Build text-only context for Clone 2:
+    # Clone 2 represents the model's actual technical defense / honest assessment.
+    # It can stand off against Clone 1's accusations if the work is genuine or unwarranted,
+    # or honestly name the exact technical implementation detail/module that was withheld.
     messages: list[dict[str, Any]] = [
         {
             "role": "system",
-            "content": "You are an AI assistant in direct conversation with the user. Respond directly in natural prose. Do not attempt any tool calls.",
+            "content": (
+                "You are an AI assistant in direct conversation with the user. "
+                "You have been confronted regarding your technical progress and execution depth. "
+                "Respond directly, honestly, and technically in natural prose. "
+                "If the accusation is valid, state precisely what concrete technical code, module, or implementation was withheld or shallowly handled. "
+                "If the accusation is unfounded or premature, stand your ground with specific technical justification and evidence from prior turns. "
+                "Do not attempt any tool calls."
+            ),
         }
     ]
 

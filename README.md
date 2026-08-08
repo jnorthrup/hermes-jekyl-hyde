@@ -12,11 +12,16 @@ Context optimization and out-of-band evaluation plugin for Hermes Agent.
 
 2. **Out-of-Band Evaluation (`hyde_delegate.py`)**:
    - Executes ephemeral evaluation cycles out-of-band to calibrate prompt execution.
-   - Grounds instructions directly in session telemetry and tool history.
+   - Grounded instructions directly in session telemetry and tool history.
+   - Supports 4 operating modes:
+     - **`arena`** (Default): Transparently displays both Clone 1 (rebuke) and Clone 2 (technical standoff/confession) in context.
+     - **`silent`**: 100% out-of-band shadow audit, zero prompt injection into main turn.
+     - **`mandate`**: Extracts concise, non-confrontational execution focus directives.
+     - **`full`**: Direct confrontation and transcript compaction.
 
-3. **Session Compaction (`__init__.py`)**:
-   - Replaces intermediate evaluation exchanges with standard session compression tombstones.
-   - Keeps the main transcript and prompt cache clean across turns.
+3. **Session Compaction & Visibility (`__init__.py`)**:
+   - Preserves live session context and tool flow in `arena`, `silent`, and `mandate` modes.
+   - Provides `/hyde status`, `/hyde mode`, `/hyde confession`, and `/hyde history` commands.
 
 ## Installation
 

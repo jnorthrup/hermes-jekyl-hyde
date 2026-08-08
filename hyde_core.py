@@ -301,6 +301,35 @@ def get_ratio() -> int:
     return 7
 
 
+VALID_MODES = {"arena", "silent", "mandate", "full"}
+DEFAULT_MODE = "arena"
+
+
+def get_mode() -> str:
+    """Read the operating mode from config or env. Default 'arena'.
+
+    Modes:
+      - 'arena': presents both Clone 1 (rebuke) and Clone 2 (technical standoff/confession) directly in context.
+      - 'silent': 100% out-of-band shadow audit, zero injection into main turn.
+      - 'mandate': extracts a concise, non-confrontational work directive from Clone 2's confession.
+      - 'full': aggressive confrontation injected into main turn with tombstoning.
+    """
+    env_val = os.environ.get("JEKYLL_HYDE_MODE")
+    if env_val and env_val.lower().strip() in VALID_MODES:
+        return env_val.lower().strip()
+    try:
+        from hermes_cli.config import load_config_readonly
+        cfg = load_config_readonly() or {}
+        mode = cfg.get("jekyll_hyde", {}).get("mode")
+        if not mode:
+            mode = cfg.get("plugins", {}).get("entries", {}).get("jekyll-hyde", {}).get("mode")
+        if mode and str(mode).lower().strip() in VALID_MODES:
+            return str(mode).lower().strip()
+    except Exception:
+        pass
+    return DEFAULT_MODE
+
+
 def should_activate(
     user_message: str,
     state: HydeState,
