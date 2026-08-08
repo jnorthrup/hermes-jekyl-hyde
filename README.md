@@ -1,5 +1,7 @@
 # Jekyll-Hyde Plugin for Hermes Agent
 
+![Jekyll-Hyde](assets/jekyll_hyde.png)
+
 Context optimization and out-of-band evaluation plugin for Hermes Agent.
 
 ## Architecture
