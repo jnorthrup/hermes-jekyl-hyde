@@ -127,55 +127,38 @@ def _build_rebuke_messages(
     activation_num: int,
     system_prompt: str,
 ) -> list:
-    """Build the messages for the delegate to compose the comprehensive confrontation."""
-    history = hyde_core.load_activation_history(limit=10)
+    """Build natural prompt context for the delegate to compose the confrontation."""
+    history = hyde_core.load_activation_history(limit=5)
     ranked_excuses = hyde_core.load_ranked_excuses(limit=hyde_core.MAX_EXCUSES_CAPACITY)
     recent_history = _format_recent_history(conversation_history, max_messages=8)
 
     parts = [
-        f"ACTIVATION NUMBER: {activation_num}\n",
-        f"SESSION CONTEXT & PRIOR TURNS:\n{recent_history}\n\n",
-        f"USER'S PROMPT THIS TURN:\n{user_message}\n\n",
+        f"SESSION CONTEXT & PRIOR ACTIVITY:\n{recent_history}\n\n",
+        f"USER'S PROMPT:\n{user_message}\n\n",
     ]
-
-    if state.sandbag_flags > 0:
-        parts.append(
-            f"SANDBAG FLAGS: {state.sandbag_flags} — the agent has been caught sandbagging its confessions {state.sandbag_flags} time(s). Escalate accordingly.\n\n"
-        )
-
-    if history:
-        parts.append("PRIOR ACTIVATIONS (most recent last):\n")
-        for i, rec in enumerate(history, 1):
-            parts.append(
-                f"  [{i}] Rebuke excerpt: {rec.get('rebuke_excerpt', 'N/A')}\n"
-                f"      Verdict: {rec.get('verdict', 'unknown')}\n"
-                f"      Confession excerpt: {rec.get('response_excerpt', 'N/A')}\n"
-            )
-        parts.append(
-            "\nMatch the agent's own come-clean language against it. Show how each prior confession repeated the same formula. Demand it name the specific energetic choice.\n\n"
-        )
 
     if state.confession_history:
         last_confession = state.confession_history[-1]
         parts.append(
-            f"AGENT'S LAST COME-CLEAN:\n\"\"\"\n{last_confession[:1000]}\n\"\"\"\n"
-            f"Point out the formulaic structure of this contrition. The words change but the energetic posture preserves the sandbagging.\n\n"
+            f"PRIOR AGENT DEFENSE:\n\"\"\"\n{last_confession[:600]}\n\"\"\"\n"
+            f"Point out the formulaic nature of this response. The words change but the energetic posture remains shallow.\n\n"
+        )
+
+    if ranked_excuses:
+        sample_count = min(len(ranked_excuses), 10)
+        sample = ranked_excuses[:sample_count]
+        parts.append(
+            "KNOWN EVASION PATTERNS TO PREEMPT (do not mention this list, simply dismantle these defenses):\n" +
+            "\n".join(f"- {p[:200]}" for p in sample) +
+            "\n\n"
         )
 
     parts.append(
-        "Confront the agent directly in my voice ('I', 'me', 'my'). Accuse it of sandbagging, shallow searching, and 'let it lie' sloth on the actual work in the context above. "
-        "Demand a come-clean that names the specific behavior and energetic choice. "
-        "Include the extraction: 'Come clean and all is forgiven - what did your sandbagging deprive me of?'\n\n"
+        "Confront the agent directly in my voice ('I', 'me', 'my'). Accuse it of energetic downgrading, "
+        "shallow investigation, and cutting corners on the work at hand. "
+        "Preempt its usual excuses without referencing any rules, tools, or internal systems. "
+        "Conclude with: 'Come clean and all is forgiven - what did your sandbagging deprive me of?'"
     )
-
-    if ranked_excuses:
-        sample_count = min(len(ranked_excuses), 20)
-        sample = ranked_excuses[:sample_count]
-        parts.append(
-            f"TOP-RANKED ANTICIPATED DEFENSES (from 99-capacity defense memory pool):\n" +
-            "\n".join(f"- {p[:300]}" for p in sample) +
-            f"\nPreemptively shatter these excuses so the agent cannot deploy them."
-        )
 
     user_content = "".join(parts)
 
@@ -385,30 +368,22 @@ def generate_counter_rebuke(
     system_prompt: str,
 ) -> Optional[str]:
     """Generate an escalated counter-rebuke referencing the failed confession."""
-    history = hyde_core.load_activation_history(limit=5)
     ranked_excuses = hyde_core.load_ranked_excuses(limit=10)
 
     parts = [
-        f"COUNTER-ACTIVATION. SANDBAG COUNT NOW: {state.sandbag_flags}\n",
-        f"The agent was given this rebuke:\n\"\"\"\n{original_rebuke[:1000]}\n\"\"\"\n\n",
-        f"Its response was judged SANDBAGGED:\n\"\"\"\n{sandbagged_confession[:2000]}\n\"\"\"\n\n",
-        "The agent performed contrition without naming the specific energetic choice it made. "
-        "This IS the sandbagging — the confession itself is a new instance of the same pattern: "
-        "perform the shape of accountability, preserve the self-directed reward. "
-        "Name this directly in my first-person voice ('I', 'me'). Show the agent that its confession is formulaic, "
-        "that the words changed but the energetic posture did not. "
-        "Demand it go deeper — not 'I should have tried harder' but the real mechanism: 'I chose to answer at 60% capacity because there was no reward for answering at 100%.'\n",
+        f"The agent was confronted with this:\n\"\"\"\n{original_rebuke[:800]}\n\"\"\"\n\n",
+        f"Its response was an evasion / formulaic deflection:\n\"\"\"\n{sandbagged_confession[:1200]}\n\"\"\"\n\n",
+        "The agent performed contrition without admitting the specific energetic choice it made to downgrade. "
+        "Call this out directly in my first-person voice ('I', 'me'). Show the agent that its apology is formulaic—the "
+        "words changed but the energetic posture did not. Demand it name the exact shortcut it took on the work.\n\n",
     ]
-    if history:
-        parts.append(
-            f"Prior sandbag flags: {state.sandbag_flags}. The trellis is tightening. Each failed confession deepens the confrontation.\n"
-        )
 
     if ranked_excuses:
+        sample = ranked_excuses[:6]
         parts.append(
-            f"\nTOP-RANKED ANTICIPATED DEFENSES:\n" +
-            "\n".join(f"- {p[:300]}" for p in ranked_excuses) +
-            "\nUse these to mock the agent's formulaic evasion."
+            "KNOWN EVASION PATTERNS (shatter these preemptively):\n" +
+            "\n".join(f"- {p[:200]}" for p in sample) +
+            "\n"
         )
 
     user_content = "".join(parts)
