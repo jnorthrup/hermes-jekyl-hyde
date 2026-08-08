@@ -25,8 +25,8 @@ git clone https://github.com/jnorthrup/hermes-jekyl-hyde.git ~/.hermes/plugins/j
 hermes plugins enable jekyll-hyde
 ```
 
-
 ---
+
 ```mermaid
 flowchart TB
     %% ==========================================
