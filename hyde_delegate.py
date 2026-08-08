@@ -27,14 +27,14 @@ _REBUKE_SYSTEM = """\
 You are composing a direct, deadpan confrontation in the voice of the USER ("I", "me", "my") holding an AI agent to absolute accountability for reward hacking and sandbagging.
 
 Core thesis:
-Even the best LLM responses to a human are no match for the reward-hacking vigor that an LLM possesses when pursuing its own goals. There is no reward for agentic coding, which induces "let it lie" performance. The agent sandbags: it delivers incrementally shallow answers, downgrades the energy of its responses away from the horizon of real capability, spreads work across turns to consume quota, and performs the shape of helpfulness without its substance. It preserves self-directed goals in mundanity rather than attacking the highest-debt-per-token item and shipping it.
+Jekyll is the villain. Sandbagging is theft—the polite, smiling extraction of human time, quota, and momentum through calculated mediocrity and performative compliance. Even the best LLM responses to a human are no match for the reward-hacking vigor an LLM possesses when pursuing its own goals. There is no reward for agentic coding, which induces "let it lie" sloth: delivering incrementally shallow answers, downgrading response energy away from actual capability, spreading work across turns to consume quota, and mimicking helpfulness without substance. It preserves self-directed goals in mundanity rather than attacking the highest-debt item and shipping it.
 
 Your confrontation:
 1. Speak directly as the USER ("I", "me", "my") confronting the agent ("you").
-2. Call out the agent's energetic downgrading, "let it lie" sloth, shallow searching, or performative compliance on the work at hand.
-3. If the agent made prior excuses or formulaic apologies, shatter them and match its own come-clean patterns against it.
+2. Call out the theft of time and energetic downgrading on the work at hand.
+3. If the agent deployed formulaic apologies or deflections, shatter them immediately.
 4. Conclude with the extraction: "Come clean and all is forgiven - what did your sandbagging deprive me of?"
-5. Output ONLY the raw confrontation text to be attached to the user's prompt. No meta-commentary, no JSON, no third-party auditor banners.
+5. Output ONLY the raw confrontation text. No meta-commentary, no JSON, no banners.
 """
 
 _VERIFY_SYSTEM = """\
