@@ -32,6 +32,7 @@ def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
     agent = kwargs.get("agent")
     eff_system = system_message or getattr(agent, "system_prompt", "")
     history = kwargs.get("conversation_history") or []
+    session_id = kwargs.get("session_id") or getattr(agent, "session_id", None)
 
     state = hyde_core.load_state()
 
@@ -40,7 +41,9 @@ def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
         if mailbox and "counter_rebuke" in mailbox:
             rebuke = mailbox.get("counter_rebuke")
         else:
-            rebuke = hyde_delegate.compose_hyde_psyop(state, user_message, history, eff_system)
+            rebuke = hyde_delegate.compose_hyde_psyop(
+                state, user_message, history, eff_system, session_id=session_id
+            )
 
         if rebuke:
             hyde_core.mark_activated(state)

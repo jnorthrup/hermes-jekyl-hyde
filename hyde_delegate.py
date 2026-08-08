@@ -190,6 +190,7 @@ def compose_hyde_psyop(
     user_message: str,
     conversation_history: list,
     system_prompt: str,
+    session_id: Optional[str] = None,
 ) -> Optional[str]:
     """Compose the comprehensive confrontation before Turn N."""
     activation_num = state.total_activations + 1
@@ -198,10 +199,11 @@ def compose_hyde_psyop(
     )
     try:
         response = call_llm(
-            task="hyde-rebuke",
+            task="prompt-refinement",
             messages=messages,
             temperature=0.8,
             max_tokens=1000,
+            session_id=session_id,
         )
         text = response.choices[0].message.content.strip()
         if text:
