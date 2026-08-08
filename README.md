@@ -29,6 +29,11 @@ hermes plugins enable jekyll-hyde
 
 ---
 
+<img width="902" height="343" alt="image" src="https://github.com/user-attachments/assets/45d35cf4-259b-4318-bc71-40244854de4f" />
+
+
+---
+
 ```mermaid
 flowchart TB
     %% ==========================================
