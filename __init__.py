@@ -192,7 +192,7 @@ def _on_hyde_command(raw_args: str = "") -> str:
         "  status   — show turn counter, activations, and sandbag count\n"
         "  activate — force activation on the next turn\n"
         "  reset    — reset turn counters and mailbox\n"
-        "  ratio N  — set activation frequency (e.g. /hyde ratio 3)\n"
+        "  ratio N  — set activation frequency (e.g. /hyde ratio 7)\n"
         "  history  — list recent audit logs"
     )
 

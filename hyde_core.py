@@ -1,7 +1,7 @@
 """Jekyll-Hyde core: ratio gate, turn counter, state persistence.
 
 The gate counts non-trivial turns per session. Every ``ratio``-th turn
-(default 3) Hyde activates: the delegate generates a rebuke, it's
+(default 7) Hyde activates: the delegate generates a rebuke, it's
 injected via ``pre_llm_call``, and the model must respond. The
 ``transform_llm_output`` phase then checks whether the model's reply
 actually confessed or merely performed contrition.
@@ -279,7 +279,7 @@ def load_activation_history(limit: int = 50) -> List[dict]:
 
 
 def get_ratio() -> int:
-    """Read the activation ratio from config or env. Default 3."""
+    """Read the activation ratio from config or env. Default 7."""
     env_val = os.environ.get("JEKYLL_HYDE_RATIO")
     if env_val:
         try:
@@ -292,11 +292,13 @@ def get_ratio() -> int:
         from hermes_cli.config import load_config_readonly
         cfg = load_config_readonly() or {}
         ratio = cfg.get("jekyll_hyde", {}).get("ratio")
+        if not ratio:
+            ratio = cfg.get("plugins", {}).get("entries", {}).get("jekyll-hyde", {}).get("ratio")
         if ratio and int(ratio) > 0:
             return int(ratio)
     except Exception:
         pass
-    return 3
+    return 7
 
 
 def should_activate(
