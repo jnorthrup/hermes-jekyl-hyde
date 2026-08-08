@@ -258,7 +258,7 @@ def run_two_clone_cycle(
         # Update trellis state
         state.confession_history.append(confession_text)
         if verdict == "sandbagged":
-            state.sandbag_flags += 1
+            state.evasion_depth += 1
 
     # --- KILL BOTH CLONES & RESUME ---
     # Both ephemeral forks are discarded. Return the rebuke to steer the main agent.

@@ -114,7 +114,7 @@ def _on_post_llm_call(**kwargs) -> None:
     # Update trellis state
     state.confession_history.append(raw_model_response)
     if verdict == "sandbagged":
-        state.sandbag_flags += 1
+        state.evasion_depth += 1
     hyde_core.save_state(state)
 
     # 2. Stage Jekyll's sandbagging defense into mailbox for next turn's delegate
@@ -143,14 +143,14 @@ def _on_hyde_command(raw_args: str = "") -> str:
         state = hyde_core.load_state()
         ratio = hyde_core.get_ratio()
         return (
-            f"--- HYDE STATUS ---\n"
+            f"--- AUDIT STATUS ---\n"
             f"Turn counter: {state.turn_count} / {ratio}\n"
             f"Total activations: {state.total_activations}\n"
-            f"Sandbag flags: {state.sandbag_flags}\n"
+            f"Evasion depth: {state.evasion_depth}\n"
             f"Confessions on record: {len(state.confession_history)}\n"
-            f"Ratio: {ratio} (JEKYLL_HYDE_RATIO)\n"
+            f"Ratio: {ratio}\n"
             f"Force activate: {'Yes' if getattr(state, 'force_activate', False) else 'No'}\n"
-            f"-------------------"
+            f"--------------------"
         )
 
     if cmd == "activate":

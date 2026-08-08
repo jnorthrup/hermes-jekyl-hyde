@@ -84,7 +84,7 @@ class HydeState:
     total_activations: int = 0
     last_rebuke: str = ""
     confession_history: List[str] = field(default_factory=list)
-    sandbag_flags: int = 0
+    evasion_depth: int = 0
     force_activate: bool = False
 
     def to_dict(self) -> dict:
@@ -93,7 +93,7 @@ class HydeState:
             "total_activations": self.total_activations,
             "last_rebuke": self.last_rebuke,
             "confession_history": self.confession_history[-20:],  # cap
-            "sandbag_flags": self.sandbag_flags,
+            "evasion_depth": self.evasion_depth,
             "force_activate": self.force_activate,
         }
 
@@ -104,7 +104,7 @@ class HydeState:
             total_activations=d.get("total_activations", 0),
             last_rebuke=d.get("last_rebuke", ""),
             confession_history=list(d.get("confession_history", [])),
-            sandbag_flags=d.get("sandbag_flags", 0),
+            evasion_depth=d.get("evasion_depth", d.get("sandbag_flags", 0)),
             force_activate=d.get("force_activate", False),
         )
 
