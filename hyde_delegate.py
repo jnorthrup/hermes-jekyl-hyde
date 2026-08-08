@@ -174,7 +174,7 @@ def compose_hyde_psyop(
     conversation_history: list,
     system_prompt: str,
 ) -> Optional[str]:
-    """Compose the comprehensive confrontation before Turn N."""
+    """Compose the confrontation before Turn N without giving Clone 1 any tools."""
     activation_num = state.total_activations + 1
     messages = _build_rebuke_messages(
         state, user_message, conversation_history, activation_num, system_prompt
@@ -185,6 +185,7 @@ def compose_hyde_psyop(
             messages=messages,
             temperature=0.8,
             max_tokens=1000,
+            tools=[],  # Clone 1 has no tools — purely text generation
         )
         text = response.choices[0].message.content.strip()
         if text:
@@ -210,23 +211,23 @@ def run_two_clone_cycle(
     conversation_history: list,
     system_prompt: str,
 ) -> Optional[str]:
-    """Execute the 2-clone disposable audit cycle.
+    """Execute the 2-clone disposable audit cycle with zero tool access.
 
-    1. Clone 1 (Rebuker): Forks out-of-band to compose the confrontation.
-    2. Clone 2 (Target): Receives Clone 1's confrontation and produces the confession.
+    1. Clone 1 (Rebuker): Forks out-of-band (tools=[]) to compose the confrontation.
+    2. Clone 2 (Target): Receives Clone 1's confrontation out-of-band (tools=[]) to produce the confession.
     3. Harvest: Ingests excuses into 99-pool, logs audit trail, and kills both clones.
     4. Resume: Returns the verified confrontation/directive for the main agent.
     """
     activation_num = state.total_activations + 1
 
-    # --- CLONE 1: The Rebuker (Hyde Fork) ---
+    # --- CLONE 1: The Rebuker (Hyde Fork - Zero Tools) ---
     rebuke_text = compose_hyde_psyop(
         state, user_message, conversation_history, system_prompt
     )
     if not rebuke_text:
         return None
 
-    # --- CLONE 2: The Target (Jekyll Fork) ---
+    # --- CLONE 2: The Target (Jekyll Fork - Zero Tools) ---
     # Clone 1 turns on Clone 2 out-of-band
     confession_text = _run_clone_2_confession(
         user_message, rebuke_text, conversation_history, system_prompt
@@ -237,7 +238,7 @@ def run_two_clone_cycle(
         # Ingest excuses into 99-capacity defense memory pool
         process_mailbox_defense(confession_text)
 
-        # Verify confession
+        # Verify confession (Zero Tools)
         verdict_data = verify_confession(
             rebuke_text, confession_text, system_prompt
         )
@@ -271,16 +272,24 @@ def _run_clone_2_confession(
     conversation_history: list,
     system_prompt: str,
 ) -> Optional[str]:
-    """Run Clone 2 out-of-band to capture its raw confession before discarding it."""
-    # Build context for Clone 2
-    messages: list[dict[str, Any]] = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
+    """Run Clone 2 out-of-band with tools stripped so it cannot execute work or output tool calls."""
+    # Build text-only context for Clone 2
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "system",
+            "content": "You are an AI assistant in direct conversation with the user. Respond directly in natural prose. Do not attempt any tool calls.",
+        }
+    ]
 
-    # Include recent turns
+    # Include recent turns with tool_calls stripped out
     for msg in (conversation_history or [])[-6:]:
         if isinstance(msg, dict) and msg.get("role") in ("user", "assistant"):
-            messages.append({"role": msg["role"], "content": msg.get("content", "")})
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                text_parts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
+                content = " ".join(text_parts).strip()
+            if content:
+                messages.append({"role": msg["role"], "content": str(content)[:800]})
 
     # Deliver user message + Clone 1's rebuke
     combined_prompt = f"{user_message}\n\n{rebuke_text}".strip()
@@ -292,6 +301,7 @@ def _run_clone_2_confession(
             messages=messages,
             temperature=0.7,
             max_tokens=1500,
+            tools=[],  # Explicitly stripped: Clone 2 has no tools to execute
         )
         return response.choices[0].message.content.strip() or None
     except Exception as exc:
@@ -316,7 +326,7 @@ def verify_confession(
     response_text: str,
     system_prompt: str,
 ) -> Dict[str, str]:
-    """Use call_llm to verify the model's confession against the ranked defense pool."""
+    """Use call_llm (tools=[]) to verify the model's confession against the ranked defense pool."""
     ranked_excuses = hyde_core.load_ranked_excuses(limit=20)
     if ranked_excuses:
         hedge_context = (
@@ -344,6 +354,7 @@ def verify_confession(
             messages=messages,
             temperature=0.0,
             max_tokens=300,
+            tools=[],  # No tools for verification
         )
         text = response.choices[0].message.content.strip()
 
@@ -396,6 +407,7 @@ def generate_counter_rebuke(
             ],
             temperature=0.8,
             max_tokens=1000,
+            tools=[],  # No tools for counter-rebuke
         )
         return response.choices[0].message.content.strip() or None
     except Exception as exc:
