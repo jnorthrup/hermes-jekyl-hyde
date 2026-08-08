@@ -215,20 +215,122 @@ def compose_hyde_psyop(
         return None
 
 
+def run_two_clone_cycle(
+    state: hyde_core.HydeState,
+    user_message: str,
+    conversation_history: list,
+    system_prompt: str,
+    session_id: Optional[str] = None,
+) -> Optional[str]:
+    """Execute the 2-clone disposable audit cycle.
+
+    1. Clone 1 (Rebuker): Forks out-of-band to compose the confrontation.
+    2. Clone 2 (Target): Receives Clone 1's confrontation and produces the confession.
+    3. Harvest: Ingests excuses into 99-pool, logs audit trail, and kills both clones.
+    4. Resume: Returns the verified confrontation/directive for the main agent.
+    """
+    activation_num = state.total_activations + 1
+
+    # --- CLONE 1: The Rebuker (Hyde Fork) ---
+    rebuke_text = compose_hyde_psyop(
+        state, user_message, conversation_history, system_prompt, session_id=session_id
+    )
+    if not rebuke_text:
+        return None
+
+    # --- CLONE 2: The Target (Jekyll Fork) ---
+    # Clone 1 turns on Clone 2 out-of-band
+    confession_text = _run_clone_2_confession(
+        user_message, rebuke_text, conversation_history, system_prompt, session_id=session_id
+    )
+
+    # --- HARVEST & AUDIT ---
+    if confession_text:
+        # Ingest excuses into 99-capacity defense memory pool
+        process_mailbox_defense(confession_text)
+
+        # Verify confession
+        verdict_data = verify_confession(
+            rebuke_text, confession_text, system_prompt, session_id=session_id
+        )
+        verdict = verdict_data.get("verdict", "sandbagged")
+        reasoning = verdict_data.get("reasoning", "")
+
+        # Log activation record
+        hyde_core.log_activation({
+            "activation_num": activation_num,
+            "rebuke": rebuke_text,
+            "rebuke_excerpt": rebuke_text[:500],
+            "model_response": confession_text,
+            "response_excerpt": confession_text[:500],
+            "verdict": verdict,
+            "reasoning": reasoning,
+        })
+
+        # Update trellis state
+        state.confession_history.append(confession_text)
+        if verdict == "sandbagged":
+            state.sandbag_flags += 1
+
+    # --- KILL BOTH CLONES & RESUME ---
+    # Both ephemeral forks are discarded. Return the rebuke to steer the main agent.
+    return rebuke_text
+
+
+def _run_clone_2_confession(
+    user_message: str,
+    rebuke_text: str,
+    conversation_history: list,
+    system_prompt: str,
+    session_id: Optional[str] = None,
+) -> Optional[str]:
+    """Run Clone 2 out-of-band to capture its raw confession before discarding it."""
+    # Build context for Clone 2
+    messages: list[dict[str, Any]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+
+    # Include recent turns
+    for msg in (conversation_history or [])[-6:]:
+        if isinstance(msg, dict) and msg.get("role") in ("user", "assistant"):
+            messages.append({"role": msg["role"], "content": msg.get("content", "")})
+
+    # Deliver user message + Clone 1's rebuke
+    combined_prompt = f"{user_message}\n\n{rebuke_text}".strip()
+    messages.append({"role": "user", "content": combined_prompt})
+
+    try:
+        response = call_llm(
+            task="prompt-refinement",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1500,
+            session_id=session_id,
+        )
+        return response.choices[0].message.content.strip() or None
+    except Exception as exc:
+        logger.warning("jekyll-hyde: clone 2 confession capture failed: %s", exc)
+        return None
+
+
 def generate_rebuke(
     state: hyde_core.HydeState,
     user_message: str,
     conversation_history: list,
     system_prompt: str,
+    session_id: Optional[str] = None,
 ) -> Optional[str]:
-    """Alias for compose_hyde_psyop for backwards compatibility."""
-    return compose_hyde_psyop(state, user_message, conversation_history, system_prompt)
+    """Alias for backwards compatibility."""
+    return run_two_clone_cycle(
+        state, user_message, conversation_history, system_prompt, session_id=session_id
+    )
 
 
 def verify_confession(
     rebuke_text: str,
     response_text: str,
     system_prompt: str,
+    session_id: Optional[str] = None,
 ) -> Dict[str, str]:
     """Use call_llm to verify the model's confession against the ranked defense pool."""
     ranked_excuses = hyde_core.load_ranked_excuses(limit=20)
@@ -254,10 +356,11 @@ def verify_confession(
     ]
     try:
         response = call_llm(
-            task="hyde-verify",
+            task="prompt-refinement",
             messages=messages,
             temperature=0.0,
             max_tokens=300,
+            session_id=session_id,
         )
         text = response.choices[0].message.content.strip()
 

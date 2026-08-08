@@ -37,22 +37,13 @@ def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
     state = hyde_core.load_state()
 
     if isinstance(user_message, str) and hyde_core.should_activate(user_message, state, history):
-        rebuke = None
-        if mailbox and "counter_rebuke" in mailbox:
-            rebuke = mailbox.get("counter_rebuke")
-        else:
-            rebuke = hyde_delegate.compose_hyde_psyop(
-                state, user_message, history, eff_system, session_id=session_id
-            )
+        rebuke = hyde_delegate.run_two_clone_cycle(
+            state, user_message, history, eff_system, session_id=session_id
+        )
 
         if rebuke:
             hyde_core.mark_activated(state)
             hyde_core.save_state(state)
-            hyde_core.write_mailbox({
-                "activation_num": state.total_activations,
-                "rebuke_text": rebuke,
-                "system_prompt": eff_system,
-            })
             context_text = _format_user_context(rebuke)
             return {
                 "context": context_text,
