@@ -29,7 +29,7 @@ hermes plugins enable jekyll-hyde
 
 ---
 
-<img width="902" height="343" alt="image" src="https://github.com/user-attachments/assets/45d35cf4-259b-4318-bc71-40244854de4f" />
+<img width="779" height="519" alt="image" src="https://github.com/user-attachments/assets/581ba0ab-fb96-4bf1-b6be-a943bf0babea" />
 
 
 ---
