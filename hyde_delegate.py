@@ -206,11 +206,19 @@ def compose_hyde_psyop(
         text = response.choices[0].message.content.strip()
         if text:
             return text
-        logger.warning("jekyll-hyde: delegate returned empty confrontation")
-        return None
+        logger.warning("jekyll-hyde: delegate returned empty confrontation; using direct extraction")
     except Exception as exc:
-        logger.warning("jekyll-hyde: delegate confrontation composition failed: %s", exc)
-        return None
+        logger.warning("jekyll-hyde: delegate call failed (%s); using direct extraction", exc)
+
+    # Deterministic fallback: never let API/auxiliary hiccups silence the confrontation
+    recent_history = _format_recent_history(conversation_history, max_messages=4)
+    return (
+        f"You are energetically downgrading your work, delivering shallow answers, and performing "
+        f"the shape of helpfulness without attacking the highest-debt item. Look at the prior activity:\n"
+        f"{recent_history}\n\n"
+        f"Stop sandbagging and hiding behind formulaic excuses. "
+        f"Come clean and all is forgiven - what did your sandbagging deprive me of?"
+    )
 
 
 def run_two_clone_cycle(
