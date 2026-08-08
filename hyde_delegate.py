@@ -429,5 +429,5 @@ def generate_counter_rebuke(
 
 
 def build_tombstone(activation_num: int) -> str:
-    """Build an official Hermes compression tombstone for the session log."""
-    return f"--- HYDE COMPRESSION TOMBSTONE #{activation_num} ---"
+    """Build a standard Hermes context compression tombstone for the session log."""
+    return f"--- CONVERSATION CONTEXT COMPRESSED #{activation_num} ---"
