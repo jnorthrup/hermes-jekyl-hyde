@@ -28,10 +28,10 @@ _LOCK = threading.Lock()
 
 # Trivial prompts don't count toward the ratio. Hyde only activates on
 # turns where the model actually had room to sandbag — real work, not
-# "thanks" or "ok".
+# "thanks" or "ok" or slash commands.
 _TRIVIAL_PATTERNS = [
-    re.compile(r"^\s*(thanks|thank you|ok|okay|k|sure|yep|no|yes|done|cool|nice|got it)\s*[.!]?\s*$", re.IGNORECASE),
-    re.compile(r"^\s*/[a-z]*[a-z.]*\s*$", re.IGNORECASE),  # slash commands
+    re.compile(r"^\s*(thanks|thank you|ok|okay|k|sure|yep|no|yes|done|cool|nice|got it|hi|hello|hey)\s*[.!]?\s*$", re.IGNORECASE),
+    re.compile(r"^\s*/\w+.*$", re.IGNORECASE),  # slash commands (e.g. /hyde status, /reset, /model)
 ]
 _TRIVIAL_MAX_LEN = 12
 
@@ -41,7 +41,7 @@ def is_trivial(user_message: str) -> bool:
     if not user_message or not isinstance(user_message, str):
         return True
     text = user_message.strip()
-    if len(text) <= _TRIVIAL_MAX_LEN:
+    if not text:
         return True
     for pat in _TRIVIAL_PATTERNS:
         if pat.match(text):
@@ -77,12 +77,14 @@ class HydeState:
             used by the delegate to match and sharpen future rebukes.
         sandbag_flags: count of times the model's confession was itself
             judged as deflection — the delegate escalates per this count.
+        force_activate: whether to activate on the next turn immediately.
     """
     turn_count: int = 0
     total_activations: int = 0
     last_rebuke: str = ""
     confession_history: List[str] = field(default_factory=list)
     sandbag_flags: int = 0
+    force_activate: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -91,6 +93,7 @@ class HydeState:
             "last_rebuke": self.last_rebuke,
             "confession_history": self.confession_history[-20:],  # cap
             "sandbag_flags": self.sandbag_flags,
+            "force_activate": self.force_activate,
         }
 
     @classmethod
@@ -101,6 +104,7 @@ class HydeState:
             last_rebuke=d.get("last_rebuke", ""),
             confession_history=list(d.get("confession_history", [])),
             sandbag_flags=d.get("sandbag_flags", 0),
+            force_activate=d.get("force_activate", False),
         )
 
 
@@ -294,19 +298,34 @@ def get_ratio() -> int:
     return 3
 
 
-def should_activate(user_message: str, state: HydeState) -> bool:
+def should_activate(
+    user_message: str,
+    state: HydeState,
+    conversation_history: Optional[List[Any]] = None,
+) -> bool:
     """Check if Hyde should activate on this turn.
 
     Increments the turn counter for non-trivial turns, returns True if
-    the counter hits the ratio. Does NOT reset the counter on activation
-    — that happens after the full verify cycle completes.
+    the counter hits the ratio or force_activate is set, AND the agent has actually
+    taken at least one turn / inspected files in the session.
     """
     if is_trivial(user_message):
         return False
+
+    # Do not activate if the agent hasn't even taken a turn or looked at files yet in this session
+    if conversation_history is not None and not getattr(state, "force_activate", False):
+        has_assistant_turn = any(
+            isinstance(m, dict) and m.get("role") == "assistant"
+            for m in conversation_history
+        )
+        if not has_assistant_turn:
+            return False
+
     with _LOCK:
         state.turn_count += 1
         ratio = get_ratio()
-        if state.turn_count >= ratio:
+        if getattr(state, "force_activate", False) or state.turn_count >= ratio:
+            state.force_activate = False
             return True
     return False
 
@@ -316,3 +335,4 @@ def mark_activated(state: HydeState) -> None:
     with _LOCK:
         state.total_activations += 1
         state.turn_count = 0  # reset the counter
+        state.force_activate = False

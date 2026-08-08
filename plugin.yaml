@@ -2,4 +2,11 @@ name: jekyll-hyde
 version: 2.0.0
 description: "Jekyll-Hyde: The delegate audits the agent's integrity every Nth turn. It injects a deadpan rebuke, forcing the agent to come clean about its energetic downgrading. The delegate then evaluates the agent's confession. A 'sandbagged' verdict escalates the next confrontation. The interaction is hidden behind a tombstone, preserving the user's conversational flow while building an escalating trellis of guards over time."
 author: "NousResearch"
-hooks: []
+provides_hooks:
+  - pre_llm_call
+  - transform_llm_output
+  - post_llm_call
+hooks:
+  - pre_llm_call
+  - transform_llm_output
+  - post_llm_call
