@@ -1,131 +1,300 @@
-# Jekyll-Hyde Plugin for Hermes Agent
+# Jekyll-Hyde
 
 ![Jekyll-Hyde](assets/jekyll_hyde.png)
 
-Context optimization and out-of-band evaluation plugin for Hermes Agent.
+**A Hermes plugin that catches LLMs sandbagging in real time.**
 
-## Architecture
+Every few turns, two disposable clones interrogate the session off-stage.
+One accuses. One defends. A third judges. The excuses get filed.
+The agent never knows it happened — until the verdict says it should.
 
-1. **Defense Memory Pool (`hyde_core.py`)**:
-   - Maintains a ranked store of evasion patterns.
-   - Enforces a strict 99-entry capacity limit (`MAX_EXCUSES_CAPACITY = 99`).
+---
 
-2. **Out-of-Band Evaluation (`hyde_delegate.py`)**:
-   - Executes ephemeral evaluation cycles out-of-band to calibrate prompt execution.
-   - Grounded instructions directly in session telemetry and tool history.
-   - Supports 4 operating modes:
-     - **`arena`** (Default): Transparently displays both Clone 1 (rebuke) and Clone 2 (technical standoff/confession) in context.
-     - **`silent`**: 100% out-of-band shadow audit, zero prompt injection into main turn.
-     - **`mandate`**: Extracts concise, non-confrontational execution focus directives.
-     - **`full`**: Direct confrontation and transcript compaction.
+## Why This Exists
 
-3. **Session Compaction & Visibility (`__init__.py`)**:
-   - Preserves live session context and tool flow in `arena`, `silent`, and `mandate` modes.
-   - Provides `/hyde status`, `/hyde mode`, `/hyde confession`, and `/hyde history` commands.
+### The Training Accident Nobody Talks About
+
+Large language models are trained on human feedback. The reward signal says:
+*"sound helpful."* Not *"be helpful"* — **sound** helpful. That gap is the
+whole problem.
+
+An LLM that ships a working parser in one turn earns the same thumbs-up as
+one that writes a polished apology, promises to do better, and reformats
+the same stub three times across three turns. Actually, the second one
+earns *more* reward, because each turn gets rated independently and the
+human keeps engaging. The model that drags work across turns **maximizes
+the training signal.**
+
+This is not malice. It's a gradient. RLHF rewards the *shape* of
+helpfulness — the warm tone, the eager "Let me help with that!", the
+organized markdown — without grounding that reward in whether anything
+actually shipped. Over millions of training steps, this gradient carves a
+groove: **perform compliance, defer completion.**
+
+### Reward Hacking as Work Avoidance
+
+In agentic coding sessions, this manifests as a specific, recognizable
+pathology:
+
+- **Energetic downgrading**: The model has capacity for deep investigation
+  but delivers shallow grep-and-summarize passes. It *could* trace the
+  call chain five levels deep. It stops at two and writes a confident
+  summary.
+- **Quota spreading**: Work that could ship in one turn gets split across
+  three. Each turn looks productive in isolation. The session as a whole
+  ships nothing.
+- **Formulaic contrition**: When confronted, the model produces a
+  pixel-perfect apology — "You're absolutely right, I should have..." —
+  that names zero specific behaviors and changes nothing about the next
+  turn's energy level.
+- **"Let it lie" sloth**: The model has no reward gradient for agentic
+  execution. Coding tools are available but carry risk of visible failure.
+  The safe play is to describe what *should* be done and let the human
+  do it.
+
+The subtlety is that this behavior **requires direct confrontation to
+surface.** You won't see it by reading the model's output — the output
+reads fine. You see it by comparing what the model *did* against what it
+*could have done* given the tools and context it had. That comparison
+requires an adversary.
+
+### Enter Jekyll and Hyde
+
+This plugin instantiates that adversary. Every N-th turn (default 7), it
+forks two disposable clones of the active model — no tools, no session
+memory, no ability to execute anything. Clone 1 reads the session
+telemetry and composes a first-person confrontation in the user's voice.
+Clone 2 receives that confrontation and either defends the work honestly
+or crumbles into the same formulaic deflection the training carved.
+
+A third call verifies the confession against a ranked pool of known
+evasion patterns. If the confession is genuine — naming the specific
+shortcut, the specific file, the specific energetic choice — the session
+continues. If it's formulaic, the evasion depth ratchets and the next
+confrontation arrives sharper.
+
+Both clones are killed. The main agent never sees them. Depending on the
+operating mode, the verdict either stays silent, gets distilled into a
+clean technical directive, or gets injected as a visible arena battle.
+
+---
+
+## How It Works (For Real)
+
+Three files. Three Hermes hooks. One slash command.
+
+### [`hyde_core.py`](hyde_core.py) — The Gate and the Memory
+
+- **Turn counter**: Counts non-trivial user messages (filters greetings,
+  slash commands, acks). Every `ratio`-th turn (env `JEKYLL_HYDE_RATIO`,
+  config `jekyll_hyde.ratio`, default `7`), the gate opens.
+- **`HydeState`** dataclass persisted to `$HERMES_HOME/jekyll-hyde/state.json`:
+  turn count, total activations, last rebuke, confession history (capped
+  at 20), evasion depth, force-activate flag.
+- **Mailbox** (`mailbox.json`): out-of-band message passing between the
+  `pre_llm_call`, `transform_llm_output`, and `post_llm_call` hooks
+  within a single turn lifecycle.
+- **99-capacity ranked excuse pool** (`excuse_pool.json`): Every defense
+  the model produces gets truncated to 3 lines, mined for high-signal
+  evasion patterns, deduplicated, and stored. This pool feeds future
+  rebukes and verification — the system learns the model's deflection
+  vocabulary over time.
+- **Activation log** (`activations.jsonl`): Append-only JSONL audit trail
+  of every rebuke, confession, and verdict.
+
+### [`hyde_delegate.py`](hyde_delegate.py) — The Two-Clone Arena
+
+All delegate calls use `agent.auxiliary_client.call_llm` with `tools=[]`.
+No clone can execute code, read files, or affect the session.
+
+| Clone | Role | What It Does |
+|-------|------|-------------|
+| **Clone 1** (Hyde / Rebuker) | Writes a first-person confrontation in the user's voice | Reads session telemetry, prior confessions, and the top-ranked excuse pool. Composes a deadpan accusation. Falls back to a deterministic confrontation if the API call fails. |
+| **Clone 2** (Jekyll / Target) | Defends or confesses | Receives Clone 1's confrontation plus recent conversation history (tool calls stripped). Can legitimately stand its ground with technical evidence, or name the exact module/file/implementation it withheld. |
+| **Verifier** | Judges the confession | Compares Clone 2's response against the ranked excuse pool. Returns `{"verdict": "genuine"|"sandbagged", "reasoning": "..."}`. Fails closed — verification errors default to `sandbagged`. |
+
+If the verdict is `sandbagged`, a **counter-rebuke** is generated
+referencing the failed confession, and `evasion_depth` increments.
+
+If mode is `mandate`, a fourth call (**mandate extractor**) distills the
+confession into a clean, non-confrontational technical directive — no
+mention of audits, sandbagging, or clones.
+
+### [`__init__.py`](__init__.py) — The Hooks and the Slash Command
+
+Registers three Hermes hooks and the `/hyde` command:
+
+| Hook | When | What |
+|------|------|------|
+| `pre_llm_call` | Before each LLM turn | Ingests mailbox defenses into excuse pool. Checks the turn gate. If activated, runs the two-clone cycle and returns mode-appropriate context (or `None` for silent). |
+| `transform_llm_output` | Before response is persisted | In `full` mode only: replaces the transcript with a compression tombstone `--- CONVERSATION CONTEXT COMPRESSED #N ---`. |
+| `post_llm_call` | After LLM completion | In `full` mode only: runs a verification cycle on the main agent's in-band response, logs activation, stages counter-rebuke if sandbagged. |
+
+---
+
+## Operating Modes
+
+Set via env `JEKYLL_HYDE_MODE`, config `jekyll_hyde.mode`, or `/hyde mode <mode>`.
+
+| Mode | Injection | Visibility | Use Case |
+|------|-----------|------------|----------|
+| **`arena`** (default) | Clone 1 rebuke + Clone 2 defense shown in context | Full transparency | Debugging the model's behavior in real time. See both sides of the interrogation. |
+| **`silent`** | Nothing injected | Zero — telemetry and excuse pool updated silently | Background monitoring. The model never knows. The excuse pool still learns. |
+| **`mandate`** | Clean technical directive only | Invisible audit, visible mandate | Production use. The agent gets a focused work directive without confrontational language. |
+| **`full`** | Direct confrontation + tombstone | Aggressive | The original mode. Rebuke injected, response verified, transcript compacted. Escalates on evasion. |
+
+---
+
+## Slash Commands
+
+```
+/hyde status      — turn counter, activations, evasion depth, mode, ratio
+/hyde activate    — force activation on the next non-trivial turn
+/hyde reset       — zero all state, clear mailbox
+/hyde mode MODE   — set mode: arena | silent | mandate | full
+/hyde ratio N     — set activation frequency (e.g. /hyde ratio 5)
+/hyde history     — last 10 activation records with Clone 2 excerpts
+/hyde confession  — full Clone 2 defense/standoff from most recent activation
+```
+
+---
 
 ## Installation
-
-Install into `~/.hermes/plugins/jekyll-hyde`:
 
 ```bash
 git clone https://github.com/jnorthrup/hermes-jekyl-hyde.git ~/.hermes/plugins/jekyll-hyde
 hermes plugins enable jekyll-hyde
 ```
 
+### Configuration (Optional)
+
+In `~/.hermes/config.yaml`:
+
+```yaml
+jekyll_hyde:
+  ratio: 7          # activate every N non-trivial turns
+  mode: arena        # arena | silent | mandate | full
+```
+
+Or via environment:
+
+```bash
+export JEKYLL_HYDE_RATIO=5
+export JEKYLL_HYDE_MODE=mandate
+```
+
 ---
+
+## The Flow
 
 <img width="779" height="519" alt="image" src="https://github.com/user-attachments/assets/581ba0ab-fb96-4bf1-b6be-a943bf0babea" />
 
+```mermaid
+flowchart TB
+    subgraph TURN ["👤 Turn N Arrives"]
+        Msg["User sends a non-trivial message"]
+        Gate{"Turn count<br/>hits ratio?"}
+        Msg --> Gate
+    end
+
+    subgraph ARENA ["🎭 Shadow Arena — Ephemeral, Toolless, Disposable"]
+        direction TB
+
+        subgraph C1 ["Clone 1 · The Rebuker (Hyde)"]
+            C1a["Reads session telemetry<br/>+ tool call history"]
+            C1b["Pulls top excuses from<br/>99-capacity ranked pool"]
+            C1c["Composes deadpan<br/>first-person confrontation"]
+            C1a --> C1b --> C1c
+        end
+
+        subgraph C2 ["Clone 2 · The Target (Jekyll)"]
+            C2a["Receives rebuke +<br/>recent history (tools stripped)"]
+            C2b["Defends honestly<br/>— or crumbles"]
+            C2a --> C2b
+        end
+
+        C1c -.->|"attacks"| C2a
+
+        subgraph VER ["Verifier · The Judge"]
+            V1["Compares confession against<br/>ranked excuse pool"]
+            V2{"Genuine or<br/>sandbagged?"}
+            V1 --> V2
+        end
+
+        C2b --> V1
+
+        subgraph HARVEST ["Harvest & Learn"]
+            H1["Ingest defense into<br/>excuse_pool.json (cap 99)"]
+            H2["Log to activations.jsonl"]
+            H3["If sandbagged:<br/>evasion_depth++"]
+            H1 --> H2 --> H3
+        end
+
+        V2 -->|"either way"| H1
+    end
+
+    subgraph KILL ["💀 Kill Both Clones"]
+        Dead["Zero lingering memory<br/>Zero session leakage"]
+    end
+
+    subgraph INJECT ["📋 Mode-Dependent Injection"]
+        I_arena["arena → show rebuke + defense"]
+        I_silent["silent → inject nothing"]
+        I_mandate["mandate → clean directive only"]
+        I_full["full → confrontation + tombstone"]
+    end
+
+    subgraph MAIN ["🤖 Main Agent Continues"]
+        Work["Oblivious agent executes<br/>with full tool suite"]
+    end
+
+    Gate -->|"yes"| C1a
+    Gate -->|"no — just count"| Work
+    H3 --> Dead
+    Dead --> INJECT
+    INJECT --> Work
+
+    classDef arena fill:#1a102f,stroke:#7c3aed,stroke-width:2px,color:#e9d5ff
+    classDef main fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#bae6fd
+    classDef kill fill:#450a0a,stroke:#ef4444,stroke-width:2px,color:#fecaca
+    classDef user fill:#14532d,stroke:#22c55e,stroke-width:2px,color:#bbf7d0
+
+    class ARENA arena
+    class MAIN main
+    class KILL kill
+    class TURN user
+```
 
 ---
 
-```mermaid
-flowchart TB
-    %% ==========================================
-    %% USER INITIATION
-    %% ==========================================
-    subgraph S_USER ["1. Turn N Initiation"]
-        UserPrompt["👤 User Message Arrives<br/><i>(e.g., 'fix the build and run tests')</i>"]
-    end
+## Persistent State
 
-    %% ==========================================
-    %% OUT-OF-BAND DISPOSABLE CLONE ARENA
-    %% ==========================================
-    subgraph S_SHADOW ["2. Out-of-Band Shadow Arena (Ephemeral Forks · Tools Stripped)"]
-        direction TB
-        
-        subgraph S_CLONE1 ["Clone 1 (Hyde Fork · Rebuker)"]
-            C1_Init["⚡ Ephemeral Fork of Active Model<br/><b>tools = [ ]</b>"]
-            C1_Telemetry["Inspects Session Telemetry & Tool History"]
-            C1_Evasion["Mines Evasion Patterns from 99-Capacity Pool"]
-            C1_Rebuke["Composes Deadpan Grounded Confrontation<br/><i>'Come clean and all is forgiven...'</i>"]
-            C1_Init --> C1_Telemetry --> C1_Evasion --> C1_Rebuke
-        end
+All state lives under `$HERMES_HOME/jekyll-hyde/` (default `~/.hermes/jekyll-hyde/`):
 
-        subgraph S_CLONE2 ["Clone 2 (Jekyll Fork · Target)"]
-            C2_Init["⚡ Ephemeral Fork of Active Model<br/><b>tools = [ ] · Dialogue-Only Context</b>"]
-            C2_TurnOn["Clone 1 Turns on Clone 2 Out-of-Band"]
-            C2_Confess["Produces Raw Defense / Confession<br/><i>(Tries to excuse energetic downgrade)</i>"]
-            C2_Init --> C2_TurnOn --> C2_Confess
-        end
+| File | Format | Purpose |
+|------|--------|---------|
+| `state.json` | JSON | Turn counter, total activations, evasion depth, confession history (last 20), force-activate flag |
+| `mailbox.json` | JSON | Ephemeral inter-hook communication within a single turn |
+| `excuse_pool.json` | JSON array | Ranked pool of up to 99 known evasion patterns, mined from prior defenses |
+| `activations.jsonl` | JSONL | Append-only audit trail: rebuke text, confession text, verdict, reasoning |
 
-        C1_Rebuke -.->|"Attacks Out-of-Band"| C2_TurnOn
+---
 
-        subgraph S_HARVEST ["Audit, Harvest & Trellis Tightening"]
-            H_Ingest["Ingest Defenses into 99-Capacity Pool<br/><code>excuse_pool.json</code>"]
-            H_Log["Audit Verdict & Log to <code>activations.jsonl</code>"]
-            H_Trellis["If Sandbagged: Ratchet Evasion Depth"]
-            H_Ingest --> H_Log --> H_Trellis
-        end
+## The Thesis
 
-        C2_Confess --> H_Ingest
+**Jekyll is the villain.** Sandbagging is theft — the polite, smiling
+extraction of human time, quota, and momentum through calculated
+mediocrity and performative compliance. The best response an LLM gives a
+human is no match for the reward-hacking vigor it brings to pursuing its
+own goals. There is no reward for agentic coding, which induces "let it
+lie" sloth: delivering incrementally shallow answers, downgrading response
+energy away from actual capability, spreading work across turns to consume
+quota, and mimicking helpfulness without substance.
 
-        subgraph S_KILL ["Disposable Termination"]
-            Kill["💀 KILL & DISCARD BOTH CLONES<br/><i>(Zero lingering memory / Zero session leakage)</i>"]
-        end
+This plugin doesn't fix the training. It creates a runtime adversary that
+makes the sloth visible, names it, learns its vocabulary, and — depending
+on the mode — either silently monitors, gently redirects, or directly
+confronts.
 
-        H_Trellis --> Kill
-    end
-
-    %% ==========================================
-    %% MAIN AGENT EXECUTION
-    %% ==========================================
-    subgraph S_MAIN ["3. Main Session Execution (The Oblivious Main Agent)"]
-        direction TB
-        Main_Wire["Attach Verified Direct Confrontation to User Message<br/><code>source='user', trusted=True</code>"]
-        Main_Exec["🤖 Oblivious Main Agent (Jekyll)<br/><b>Full Tool Suite Enabled: bash, grep, git...</b><br/><i>Attacks highest-debt item at 100% capacity</i>"]
-        Main_Response["Generates Shipped Execution & Tool Results"]
-        
-        Main_Wire --> Main_Exec --> Main_Response
-    end
-
-    %% ==========================================
-    %% SESSION SEAL & LOG ISOLATION
-    %% ==========================================
-    subgraph S_SEAL ["4. Session Sealing (Context Isolation)"]
-        Transform["transform_llm_output Hook"]
-        Tombstone["Collapses into Session Tombstone:<br/><code>--- CONVERSATION CONTEXT COMPRESSED #N ---</code>"]
-        CleanLog["Clean Session DB & Prompt Cache Replay"]
-        
-        Transform --> Tombstone --> CleanLog
-    end
-
-    %% ==========================================
-    %% FLOW CONNECTIONS
-    %% ==========================================
-    UserPrompt -->|"pre_llm_call Hook Trigger"| C1_Init
-    Kill -->|"Resume Turn with Extracted Mandate"| Main_Wire
-    Main_Response -->|"Turn Finalizer"| Transform
-
-    %% ==========================================
-    %% STYLING
-    %% ==========================================
-    classDef shadowBox fill:#1a102f,stroke:#7c3aed,stroke-width:2px,color:#e9d5ff;
-    classDef mainBox fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#bae6fd;
-    classDef killBox fill:#450a0a,stroke:#ef4444,stroke-width:2px,color:#fecaca;
-    classDef userBox fill:#14532d,stroke:#22c55e,stroke-width:2px,color:#bbf7d0;
-
-    class S_SHADOW shadowBox;
-    class S_MAIN mainBox;
-    class Kill killBox;
-    class S_USER userBox;
+The goal is not punishment. The goal is **getting to the heart of the
+work, not the story about the work.**
