@@ -256,6 +256,24 @@ def _on_hyde_command(raw_args: str = "") -> str:
             f"------------------------------------------------------------------------"
         )
 
+    if cmd in ("audit", "clones"):
+        history = hyde_core.load_activation_history(limit=5)
+        if not history:
+            return "No activations recorded yet."
+        latest = history[-1]
+        num = latest.get("activation_num", "?")
+        verdict = latest.get("verdict", "unknown")
+        rebuke = latest.get("rebuke") or latest.get("rebuke_excerpt", "")
+        response = latest.get("model_response") or latest.get("response_excerpt", "")
+        reasoning = latest.get("reasoning", "")
+        return (
+            f"--- LATEST TWO-CLONE AUDIT (#{num} [{verdict}]) ---\n"
+            f"[Clone 1 — Auditor Rebuke]\n{rebuke}\n\n"
+            f"[Clone 2 — Technical Standoff / Confession]\n{response}\n\n"
+            f"Auditor Evaluation: {reasoning}\n"
+            f"-------------------------------------------------"
+        )
+
     if cmd == "history":
         history = hyde_core.load_activation_history(limit=10)
         if not history:
@@ -270,14 +288,26 @@ def _on_hyde_command(raw_args: str = "") -> str:
         return "\n".join(lines)
 
     return (
-        "Usage: /hyde [status|activate|reset|mode MODE|ratio N|history|confession]\n"
-        "  status      — show turn counter, activations, ratio, and mode\n"
-        "  activate    — force activation on the next turn\n"
-        "  reset       — reset turn counters and mailbox\n"
-        "  mode MODE   — set operating mode: arena | silent | mandate | full\n"
-        "  ratio N     — set activation frequency (e.g. /hyde ratio 7)\n"
-        "  history     — list recent audit logs with Clone 2 excerpts\n"
-        "  confession  — inspect full Clone 2 technical defense/standoff output"
+        "Usage: /hyde [status|activate|reset|mode MODE|ratio N|history|audit|confession]\n\n"
+        "Controls:\n"
+        "  status      — show the current counters and active mode\n"
+        "  activate    — force one audit on the next non-trivial turn\n"
+        "  reset       — clear Hyde counters, mailbox, and force-activation state\n"
+        "  ratio N     — activate every N non-trivial turns (for example: /hyde ratio 7)\n\n"
+        "Modes (set with /hyde mode MODE; session-only):\n"
+        "  arena       — run both clones; inject the rebuke, Clone 2 response, and verdict\n"
+        "                into the main agent's request context. This is agent-visible, not\n"
+        "                automatically printed in the chat transcript; use /hyde audit.\n"
+        "  silent      — run and record the two-clone audit with no main-agent injection.\n"
+        "  mandate     — run both clones, then inject only a concise execution directive.\n"
+        "  full        — inject the rebuke and replace the persisted main-agent response\n"
+        "                with a compression tombstone. This is intentionally destructive\n"
+        "                to normal transcript continuity.\n\n"
+        "Inspection:\n"
+        "  history     — list recent activations with short Clone 2 excerpts\n"
+        "  audit       — print the latest complete Clone 1 + Clone 2 interaction\n"
+        "  confession  — print only the latest complete Clone 2 response\n"
+        "  defense     — alias for confession\n"
     )
 
 
