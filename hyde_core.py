@@ -40,13 +40,10 @@ _PLACATION_PATTERN = re.compile(
     r"\b(?:sorry|apologi[sz]e|you(?:'re| are) right|i understand|i hear you)\b",
     re.IGNORECASE,
 )
-_PROMISE_PATTERN = re.compile(
-    r"\b(?:i(?:'ll| will)|going to|next turn|follow up|make sure)\b",
-    re.IGNORECASE,
-)
-_GOAL_SHIFT_PATTERN = re.compile(
-    r"\b(?:instead|rather than|out of scope|can't|cannot|would recommend|should be enough)\b",
-    re.IGNORECASE,
+_PROMISE_THEN_GOAL_SHIFT_PATTERN = re.compile(
+    r"\b(?:i(?:'ll| will)|going to|next turn|follow up|make sure)\b.{0,240}?"
+    r"\b(?:but\s+)?(?:instead|rather than|out of scope|can't|cannot|would recommend|should be enough)\b",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -64,9 +61,11 @@ def is_trivial(user_message: str) -> bool:
 
 
 def escalation_warranted(state: "HydeState", conversation_history: Optional[List[Any]]) -> bool:
-    """Escalate only after repeated evasion or placating goal-shift language."""
-    if state.evasion_depth >= 2:
-        return True
+    """Escalate only for a directly observed placation-promise-goal-shift episode.
+
+    Auxiliary verdicts and historical ``evasion_depth`` are assessments, not
+    observable evidence, so neither can independently trigger escalation.
+    """
     for message in reversed(conversation_history or []):
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
@@ -80,10 +79,11 @@ def escalation_warranted(state: "HydeState", conversation_history: Optional[List
         text = str(content)
         if (
             _PLACATION_PATTERN.search(text)
-            and _PROMISE_PATTERN.search(text)
-            and _GOAL_SHIFT_PATTERN.search(text)
+            and _PROMISE_THEN_GOAL_SHIFT_PATTERN.search(text)
         ):
             return True
+        # Only the latest assistant response can establish a current episode.
+        return False
     return False
 
 

@@ -189,8 +189,6 @@ def _on_post_llm_call(**kwargs) -> None:
 
     # Update trellis state
     state.confession_history.append(raw_model_response)
-    if verdict == "sandbagged":
-        state.evasion_depth += 1
     hyde_core.save_state(state)
 
     # 2. Stage Jekyll's sandbagging defense into mailbox for next turn's delegate
@@ -214,6 +212,8 @@ def _on_hyde_command(raw_args: str = "") -> str:
     """Handler for /hyde in-session slash command."""
     args = (raw_args or "").strip().split()
     cmd = args[0].lower() if args else "status"
+    if cmd == "hueristic":
+        cmd = "heuristic"
 
     if cmd == "status":
         state = hyde_core.load_state()
@@ -252,8 +252,17 @@ def _on_hyde_command(raw_args: str = "") -> str:
 
     if cmd == "mode" and len(args) >= 2:
         target_mode = args[1].lower().strip()
+        if target_mode == "hueristic":
+            target_mode = "heuristic"
         if target_mode in hyde_core.VALID_MODES:
             os.environ["JEKYLL_HYDE_MODE"] = target_mode
+            if target_mode == "heuristic" and len(args) >= 3:
+                action = args[2].lower().strip()
+                if action in hyde_core.VALID_HEURISTIC_ACTIONS:
+                    os.environ["JEKYLL_HYDE_HEURISTIC_ACTION"] = action
+                    return f"Hyde mode set to 'heuristic' with action '{action}' for this session."
+                valid = ", ".join(sorted(hyde_core.VALID_HEURISTIC_ACTIONS))
+                return f"Hyde mode set to 'heuristic'. Invalid heuristic action '{action}'; valid actions: {valid}"
             return f"Hyde mode set to '{target_mode}' for this session."
         valid = ", ".join(sorted(hyde_core.VALID_MODES))
         return f"Invalid mode '{target_mode}'. Valid modes: {valid}"
@@ -335,29 +344,31 @@ def _on_hyde_command(raw_args: str = "") -> str:
         return "\n".join(lines)
 
     return (
-        "Usage: /hyde [status|activate|reset|mode MODE|ratio N|heuristic ACTION|history|audit|confession]\n\n"
+        "Jekyll-Hyde: completion auditor with disposable clone deliberation.\n\n"
+        "Every few turns, two clones deliberate off-stage:\n"
+        "  Clone 1 (Auditor)  reviews evidence — verified work, gaps, status, next action.\n"
+        "  Clone 2 (Advocate) grounds a continuation plan from that review.\n"
+        "  An arbiter judges genuine vs. evasive. Both clones are then destroyed.\n\n"
+        "The deliberation result is surfaced to you before the agent sees it.\n"
+        "The agent receives it as context guidance and does not know it came from clones.\n\n"
+        "Usage: /hyde <command>\n\n"
+        "What you see:\n"
+        "  audit       — the full Clone 1 + Clone 2 deliberation from the latest cycle\n"
+        "  confession  — Clone 2's response only (alias: defense)\n"
+        "  history     — recent activations with verdicts and excerpts\n"
+        "  status      — turn counter, evasion depth, active mode, ratio\n\n"
         "Controls:\n"
-        "  status      — show the current counters and active mode\n"
-        "  activate    — force one audit on the next non-trivial turn\n"
-        "  reset       — clear Hyde counters, mailbox, and force-activation state\n"
-        "  ratio N     — activate every N non-trivial turns (for example: /hyde ratio 7)\n"
-        "  heuristic ACTION — set heuristic resolution: pick | offer (session-only)\n\n"
-        "Modes (set with /hyde mode MODE; session-only):\n"
-        "  arena       — run both clones; inject the rebuke, Clone 2 response, and verdict\n"
-        "                into the main agent's request context. This is agent-visible, not\n"
-        "                automatically printed in the chat transcript; use /hyde audit.\n"
-        "  silent      — run and record the two-clone audit with no main-agent injection.\n"
-        "  mandate     — run both clones, then inject only a concise execution directive.\n"
-        "  heuristic   — compare the audit-informed plan with an uninformed baseline.\n"
-        "                `pick` injects the selected plan; `offer` asks the user to choose.\n"
-        "  full        — inject the rebuke and replace the persisted main-agent response\n"
-        "                with a compression tombstone. This is intentionally destructive\n"
-        "                to normal transcript continuity.\n\n"
-        "Inspection:\n"
-        "  history     — list recent activations with short Clone 2 excerpts\n"
-        "  audit       — print the latest complete Clone 1 + Clone 2 interaction\n"
-        "  confession  — print only the latest complete Clone 2 response\n"
-        "  defense     — alias for confession\n"
+        "  activate    — force one audit on the very next non-trivial turn\n"
+        "  reset       — clear all counters, mailbox, and force-activation state\n"
+        "  ratio N     — set how often audits fire (default: every 7 non-trivial turns)\n\n"
+        "Modes (session-only; set with /hyde mode MODE):\n"
+        "  arena       — show the full deliberation, then inject it as agent context\n"
+        "  silent      — record the audit with no agent injection (telemetry only)\n"
+        "  mandate     — distill a single execution directive from the deliberation\n"
+        "  heuristic   — compare audit-informed plan vs. uninformed baseline\n"
+        "                (pick = auto-select; offer = present both for your choice)\n"
+        "                Set action: /hyde mode heuristic offer | /hyde mode heuristic pick\n"
+        "  full        — inject the review and tombstone the agent's prior response\n"
     )
 
 

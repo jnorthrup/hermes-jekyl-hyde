@@ -378,8 +378,6 @@ def run_two_clone_cycle(
 
         # Update trellis state
         state.confession_history.append(confession_text)
-        if verdict == "sandbagged":
-            state.evasion_depth += 1
 
     # --- MANDATE EXTRACTION (Optional) ---
     mandate_text = None

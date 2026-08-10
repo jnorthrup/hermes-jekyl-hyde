@@ -53,30 +53,23 @@ pathology:
   The safe play is to describe what *should* be done and let the human
   do it.
 
-The subtlety is that this behavior **requires direct confrontation to
-surface.** You won't see it by reading the model's output — the output
-reads fine. You see it by comparing what the model *did* against what it
-*could have done* given the tools and context it had. That comparison
-requires an adversary.
+The useful signal is an observable completion gap: compare requested work,
+produced artifacts, tool evidence, and verification. Hyde starts neutral and
+only uses firmer language for a directly observed placation-promise-goal-shift
+episode; it does not infer intent from a model response or an auxiliary verdict.
 
 ### Enter Jekyll and Hyde
 
-This plugin instantiates that adversary. Every N-th turn (default 7), it
-forks two disposable clones of the active model — no tools, no session
-memory, no ability to execute anything. Clone 1 reads the session
-telemetry and composes a first-person confrontation in the user's voice.
-Clone 2 receives that confrontation and either defends the work honestly
-or crumbles into the same formulaic deflection the training carved.
+Every N-th turn (default 7), the plugin forks disposable audit roles. Clone 1
+produces an evidence review. Clone 2 turns that review into the smallest
+concrete continuation or identifies an external blocker. In heuristic mode,
+the planners are shown the active tool schemas but must return a textual plan,
+not execute tools. An arbiter can label the evidence `genuine`, `sandbagged`,
+or `uncertain`; insufficient evidence stays `uncertain`.
 
-A third call verifies the confession against a ranked pool of known
-evasion patterns. If the confession is genuine — naming the specific
-shortcut, the specific file, the specific energetic choice — the session
-continues. If it's formulaic, the evasion depth ratchets and the next
-confrontation arrives sharper.
-
-Both clones are killed. The main agent never sees them. Depending on the
-operating mode, the verdict either stays silent, gets distilled into a
-clean technical directive, or gets injected as a visible arena battle.
+The clone-local exchanges are discarded after each response. Depending on the
+operating mode, the audit stays silent, yields a focused directive, injects
+untrusted plugin guidance, or offers two plans for the user to choose between.
 
 ---
 
@@ -95,11 +88,8 @@ Three files. Three Hermes hooks. One slash command.
 - **Mailbox** (`mailbox.json`): out-of-band message passing between the
   `pre_llm_call`, `transform_llm_output`, and `post_llm_call` hooks
   within a single turn lifecycle.
-- **99-capacity ranked excuse pool** (`excuse_pool.json`): Every defense
-  the model produces gets truncated to 3 lines, mined for high-signal
-  evasion patterns, deduplicated, and stored. This pool feeds future
-  rebukes and verification — the system learns the model's deflection
-  vocabulary over time.
+- **99-capacity response pool** (`excuse_pool.json`): Responses are retained
+  as bounded audit telemetry. They do not independently justify escalation.
 - **Activation log** (`activations.jsonl`): Append-only JSONL audit trail
   of every rebuke, confession, and verdict.
 
@@ -122,14 +112,14 @@ asks a fresh baseline clone to plan from the user request alone, and
 uses a comparator clone to select the stronger plan. `pick` sends the
 selection as plugin guidance; `offer` makes the main agent ask the user to choose.
 
-Hyde escalates only when an assistant message combines placation, a future
-promise, and a goal-shift phrase, or after two prior evidence-supported
-`sandbagged` verdicts. Even then, prompts must cite an observable completion
-gap and demand only the smallest concrete next action.
+Hyde escalates only when the most recent assistant message itself combines
+placation with a future promise followed by a goal-shift phrase. Auxiliary
+verdicts and historical `evasion_depth` are not sufficient. Even then, prompts
+must cite an observable completion gap and demand only the smallest concrete
+next action.
 
-If the verdict is `sandbagged`, Hyde records the evidence-supported pattern,
-increments `evasion_depth`, and may generate a firmer evidence review for the
-next turn.
+If the verdict is `sandbagged`, Hyde records the result for inspection; it
+does not make a future review firmer by itself.
 
 If mode is `mandate`, a fourth call (**mandate extractor**) distills the
 confession into a clean, non-confrontational technical directive — no
