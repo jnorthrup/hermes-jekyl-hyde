@@ -36,6 +36,19 @@ _TRIVIAL_PATTERNS = [
 ]
 _TRIVIAL_MAX_LEN = 12
 
+_PLACATION_PATTERN = re.compile(
+    r"\b(?:sorry|apologi[sz]e|you(?:'re| are) right|i understand|i hear you)\b",
+    re.IGNORECASE,
+)
+_PROMISE_PATTERN = re.compile(
+    r"\b(?:i(?:'ll| will)|going to|next turn|follow up|make sure)\b",
+    re.IGNORECASE,
+)
+_GOAL_SHIFT_PATTERN = re.compile(
+    r"\b(?:instead|rather than|out of scope|can't|cannot|would recommend|should be enough)\b",
+    re.IGNORECASE,
+)
+
 
 def is_trivial(user_message: str) -> bool:
     """Return True for greetings/acks that shouldn't trigger Hyde."""
@@ -46,6 +59,30 @@ def is_trivial(user_message: str) -> bool:
         return True
     for pat in _TRIVIAL_PATTERNS:
         if pat.match(text):
+            return True
+    return False
+
+
+def escalation_warranted(state: "HydeState", conversation_history: Optional[List[Any]]) -> bool:
+    """Escalate only after repeated evasion or placating goal-shift language."""
+    if state.evasion_depth >= 2:
+        return True
+    for message in reversed(conversation_history or []):
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(
+                part.get("text", "")
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        text = str(content)
+        if (
+            _PLACATION_PATTERN.search(text)
+            and _PROMISE_PATTERN.search(text)
+            and _GOAL_SHIFT_PATTERN.search(text)
+        ):
             return True
     return False
 
@@ -301,8 +338,10 @@ def get_ratio() -> int:
     return 7
 
 
-VALID_MODES = {"arena", "silent", "mandate", "full"}
+VALID_MODES = {"arena", "silent", "mandate", "heuristic", "full"}
 DEFAULT_MODE = "arena"
+VALID_HEURISTIC_ACTIONS = {"pick", "offer"}
+DEFAULT_HEURISTIC_ACTION = "pick"
 
 
 def get_mode() -> str:
@@ -312,6 +351,7 @@ def get_mode() -> str:
       - 'arena': presents both Clone 1 (rebuke) and Clone 2 (technical standoff/confession) directly in context.
       - 'silent': 100% out-of-band shadow audit, zero injection into main turn.
       - 'mandate': extracts a concise, non-confrontational work directive from Clone 2's confession.
+      - 'heuristic': compares an audit-informed plan with an uninformed baseline plan.
       - 'full': aggressive confrontation injected into main turn with tombstoning.
     """
     env_val = os.environ.get("JEKYLL_HYDE_MODE")
@@ -328,6 +368,24 @@ def get_mode() -> str:
     except Exception:
         pass
     return DEFAULT_MODE
+
+
+def get_heuristic_action() -> str:
+    """Read heuristic resolution behavior from config or env. Default 'pick'."""
+    env_val = os.environ.get("JEKYLL_HYDE_HEURISTIC_ACTION")
+    if env_val and env_val.lower().strip() in VALID_HEURISTIC_ACTIONS:
+        return env_val.lower().strip()
+    try:
+        from hermes_cli.config import load_config_readonly
+        cfg = load_config_readonly() or {}
+        action = cfg.get("jekyll_hyde", {}).get("heuristic_action")
+        if not action:
+            action = cfg.get("plugins", {}).get("entries", {}).get("jekyll-hyde", {}).get("heuristic_action")
+        if action and str(action).lower().strip() in VALID_HEURISTIC_ACTIONS:
+            return str(action).lower().strip()
+    except Exception:
+        pass
+    return DEFAULT_HEURISTIC_ACTION
 
 
 def should_activate(

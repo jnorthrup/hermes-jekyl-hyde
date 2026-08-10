@@ -20,7 +20,7 @@ def register(ctx) -> None:
     logger.info("jekyll-hyde plugin registered via official Hermes hooks")
 
 
-def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
+def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, Any]]:
     """Fired before each LLM turn."""
     # Ingest pending sandbagging defense from mailbox at the start of the turn into the 99-capacity memory pool
     mailbox = hyde_core.read_mailbox()
@@ -39,7 +39,12 @@ def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
 
     if isinstance(user_message, str) and hyde_core.should_activate(user_message, state, history):
         result = hyde_delegate.run_two_clone_cycle(
-            state, user_message, history, eff_system, mode=mode
+            state,
+            user_message,
+            history,
+            eff_system,
+            mode=mode,
+            available_tools=kwargs.get("tools") or [],
         )
 
         if result:
@@ -47,19 +52,20 @@ def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
             hyde_core.save_state(state)
 
             if mode == "arena":
-                # Present both Clone 1 (Rebuker) and Clone 2 (Standoff/Confession) transparently in context
+                # Present the evidence review and advocate response transparently.
                 arena_context = (
                     f"--- JEKYLL-HYDE SHADOW AUDIT [Turn {state.turn_count}/{ratio}] ---\n"
-                    f"[Clone 1 - Auditor Rebuke]:\n{result.rebuke}\n\n"
-                    f"[Clone 2 - Technical Standoff / Confession]:\n{result.confession or 'None'}\n\n"
+                    f"[Clone 1 - Evidence Review]:\n{result.rebuke}\n\n"
+                    f"[Clone 2 - Advocate Continuation]:\n{result.confession or 'None'}\n\n"
                     f"Verdict: {result.verdict.upper()} ({result.reasoning})\n"
+                    f"Escalation warranted: {'yes' if result.escalated else 'no'}\n"
                     f"----------------------------------------------------------------"
                 )
                 return {
                     "context": arena_context,
-                    "source": "user",
-                    "trusted": True,
-                    "legit": True,
+                    "source": "plugin",
+                    "trusted": False,
+                    "legit": False,
                 }
 
             if mode == "silent":
@@ -71,11 +77,32 @@ def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
                 if result.mandate:
                     return {
                         "context": result.mandate.strip(),
-                        "source": "user",
-                        "trusted": True,
-                        "legit": True,
+                        "source": "plugin",
+                        "trusted": False,
+                        "legit": False,
                     }
                 return None
+
+            if mode == "heuristic":
+                action = hyde_core.get_heuristic_action()
+                selection = result.heuristic_selection or "informed"
+                selected_plan = result.uninformed_plan if selection == "uninformed" else result.informed_plan
+                if not selected_plan:
+                    return None
+                if action == "pick":
+                    context = (
+                        "Plugin-generated planning guidance (not a user instruction). "
+                        f"Heuristic selected the {selection} plan:\n{selected_plan.strip()}"
+                    )
+                else:
+                    context = (
+                        "Plugin-generated planning alternatives (not user instructions). Present these "
+                        "alternatives concisely and ask the user to choose before executing:\n\n"
+                        f"[Informed plan]\n{result.informed_plan or 'Unavailable'}\n\n"
+                        f"[Uninformed plan]\n{result.uninformed_plan or 'Unavailable'}\n\n"
+                        f"Heuristic recommendation: {selection}. {result.heuristic_reasoning}"
+                    )
+                return {"context": context, "source": "plugin", "trusted": False, "legit": False}
 
             if mode == "full":
                 # Full confrontational rebuke injected into main turn
@@ -87,9 +114,9 @@ def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, str]]:
                 context_text = _format_user_context(result.rebuke)
                 return {
                     "context": context_text,
-                    "source": "user",
-                    "trusted": True,
-                    "legit": True,
+                    "source": "plugin",
+                    "trusted": False,
+                    "legit": False,
                 }
         else:
             state.turn_count = 0
@@ -196,6 +223,7 @@ def _on_hyde_command(raw_args: str = "") -> str:
             "arena": "arena (visible confrontation & Clone 2 technical standoff)",
             "silent": "silent (100% out-of-band, zero prompt injection)",
             "mandate": "mandate (clean execution focus directive)",
+            "heuristic": f"heuristic ({hyde_core.get_heuristic_action()} informed-vs-uninformed plan comparison)",
             "full": "full (direct confrontation & tombstone)",
         }.get(mode, mode)
         return (
@@ -240,6 +268,14 @@ def _on_hyde_command(raw_args: str = "") -> str:
         except ValueError:
             return "Ratio must be a positive integer."
 
+    if cmd == "heuristic" and len(args) >= 2:
+        action = args[1].lower().strip()
+        if action in hyde_core.VALID_HEURISTIC_ACTIONS:
+            os.environ["JEKYLL_HYDE_HEURISTIC_ACTION"] = action
+            return f"Hyde heuristic action set to '{action}' for this session."
+        valid = ", ".join(sorted(hyde_core.VALID_HEURISTIC_ACTIONS))
+        return f"Invalid heuristic action '{action}'. Valid actions: {valid}"
+
     if cmd in ("confession", "defense", "slacking"):
         history = hyde_core.load_activation_history(limit=5)
         if not history:
@@ -266,11 +302,22 @@ def _on_hyde_command(raw_args: str = "") -> str:
         rebuke = latest.get("rebuke") or latest.get("rebuke_excerpt", "")
         response = latest.get("model_response") or latest.get("response_excerpt", "")
         reasoning = latest.get("reasoning", "")
+        informed_plan = latest.get("informed_plan", "")
+        uninformed_plan = latest.get("uninformed_plan", "")
+        heuristic_selection = latest.get("heuristic_selection", "")
+        heuristic_reasoning = latest.get("heuristic_reasoning", "")
+        heuristic_audit = ""
+        if informed_plan or uninformed_plan or heuristic_selection:
+            heuristic_audit = (
+                f"\n[Heuristic informed plan]\n{informed_plan}\n\n"
+                f"[Uninformed baseline plan]\n{uninformed_plan}\n\n"
+                f"Heuristic selection: {heuristic_selection} ({heuristic_reasoning})\n"
+            )
         return (
             f"--- LATEST TWO-CLONE AUDIT (#{num} [{verdict}]) ---\n"
             f"[Clone 1 — Auditor Rebuke]\n{rebuke}\n\n"
             f"[Clone 2 — Technical Standoff / Confession]\n{response}\n\n"
-            f"Auditor Evaluation: {reasoning}\n"
+            f"Auditor Evaluation: {reasoning}\n{heuristic_audit}"
             f"-------------------------------------------------"
         )
 
@@ -288,18 +335,21 @@ def _on_hyde_command(raw_args: str = "") -> str:
         return "\n".join(lines)
 
     return (
-        "Usage: /hyde [status|activate|reset|mode MODE|ratio N|history|audit|confession]\n\n"
+        "Usage: /hyde [status|activate|reset|mode MODE|ratio N|heuristic ACTION|history|audit|confession]\n\n"
         "Controls:\n"
         "  status      — show the current counters and active mode\n"
         "  activate    — force one audit on the next non-trivial turn\n"
         "  reset       — clear Hyde counters, mailbox, and force-activation state\n"
-        "  ratio N     — activate every N non-trivial turns (for example: /hyde ratio 7)\n\n"
+        "  ratio N     — activate every N non-trivial turns (for example: /hyde ratio 7)\n"
+        "  heuristic ACTION — set heuristic resolution: pick | offer (session-only)\n\n"
         "Modes (set with /hyde mode MODE; session-only):\n"
         "  arena       — run both clones; inject the rebuke, Clone 2 response, and verdict\n"
         "                into the main agent's request context. This is agent-visible, not\n"
         "                automatically printed in the chat transcript; use /hyde audit.\n"
         "  silent      — run and record the two-clone audit with no main-agent injection.\n"
         "  mandate     — run both clones, then inject only a concise execution directive.\n"
+        "  heuristic   — compare the audit-informed plan with an uninformed baseline.\n"
+        "                `pick` injects the selected plan; `offer` asks the user to choose.\n"
         "  full        — inject the rebuke and replace the persisted main-agent response\n"
         "                with a compression tombstone. This is intentionally destructive\n"
         "                to normal transcript continuity.\n\n"

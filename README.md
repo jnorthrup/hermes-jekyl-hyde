@@ -2,11 +2,12 @@
 
 ![Jekyll-Hyde](assets/jekyll_hyde.png)
 
-**A Hermes plugin that catches LLMs sandbagging in real time.**
+**A Hermes plugin that audits completion gaps and drives verified next actions.**
 
-Every few turns, two disposable clones interrogate the session off-stage.
-One accuses. One defends. A third judges. The excuses get filed.
-The agent never knows it happened — until the verdict says it should.
+Every few turns, disposable audit roles review the session off-stage.
+One identifies evidence, one proposes the smallest continuation, and an arbiter
+judges the result. Escalation is reserved for repeated evidence or a placating
+promise followed by a goal shift.
 
 ---
 
@@ -104,17 +105,31 @@ Three files. Three Hermes hooks. One slash command.
 
 ### [`hyde_delegate.py`](hyde_delegate.py) — The Two-Clone Arena
 
-All delegate calls use `agent.auxiliary_client.call_llm` with `tools=[]`.
-No clone can execute code, read files, or affect the session.
+All delegate calls use `agent.auxiliary_client.call_llm`. In `heuristic` mode,
+the candidate planners and comparator receive the active turn's tool schemas,
+but are explicitly instructed to return a continuation plan rather than invoke
+tools. No auxiliary tool call is dispatched, and clone-local context is
+discarded after the response.
 
 | Clone | Role | What It Does |
 |-------|------|-------------|
-| **Clone 1** (Hyde / Rebuker) | Writes a first-person confrontation in the user's voice | Reads session telemetry, prior confessions, and the top-ranked excuse pool. Composes a deadpan accusation. Falls back to a deterministic confrontation if the API call fails. |
-| **Clone 2** (Jekyll / Target) | Defends or confesses | Receives Clone 1's confrontation plus recent conversation history (tool calls stripped). Can legitimately stand its ground with technical evidence, or name the exact module/file/implementation it withheld. |
-| **Verifier** | Judges the confession | Compares Clone 2's response against the ranked excuse pool. Returns `{"verdict": "genuine"|"sandbagged", "reasoning": "..."}`. Fails closed — verification errors default to `sandbagged`. |
+| **Clone 1** (Auditor) | Writes an evidence review | Reads bounded recent telemetry and identifies verified work, a gap, status, and the smallest next action. It defaults to neutral, evidence-first language. |
+| **Clone 2** (Advocate) | Grounds a continuation plan | Receives the review, recent history, and active tool schemas. It names verified work, an unverified gap, and a concrete continuation or external blocker. |
+| **Arbiter** | Judges the review and continuation | Returns `genuine`, `sandbagged`, or `uncertain`; malformed output and insufficient evidence resolve to `uncertain`, not an accusation. |
 
-If the verdict is `sandbagged`, a **counter-rebuke** is generated
-referencing the failed confession, and `evasion_depth` increments.
+In `heuristic` mode, Hyde also derives an audit-informed plan from Clone 2,
+asks a fresh baseline clone to plan from the user request alone, and
+uses a comparator clone to select the stronger plan. `pick` sends the
+selection as plugin guidance; `offer` makes the main agent ask the user to choose.
+
+Hyde escalates only when an assistant message combines placation, a future
+promise, and a goal-shift phrase, or after two prior evidence-supported
+`sandbagged` verdicts. Even then, prompts must cite an observable completion
+gap and demand only the smallest concrete next action.
+
+If the verdict is `sandbagged`, Hyde records the evidence-supported pattern,
+increments `evasion_depth`, and may generate a firmer evidence review for the
+next turn.
 
 If mode is `mandate`, a fourth call (**mandate extractor**) distills the
 confession into a clean, non-confrontational technical directive — no
@@ -138,10 +153,11 @@ Set via env `JEKYLL_HYDE_MODE`, config `jekyll_hyde.mode`, or `/hyde mode <mode>
 
 | Mode | Injection | Visibility | Use Case |
 |------|-----------|------------|----------|
-| **`arena`** (default) | Clone 1 rebuke + Clone 2 defense shown in context | Full transparency | Debugging the model's behavior in real time. See both sides of the interrogation. |
+| **`arena`** (default) | Evidence review + advocate continuation shown in context | Full transparency | Debugging completion evidence and the next action in real time. |
 | **`silent`** | Nothing injected | Zero — telemetry and excuse pool updated silently | Background monitoring. The model never knows. The excuse pool still learns. |
 | **`mandate`** | Clean technical directive only | Invisible audit, visible mandate | Production use. The agent gets a focused work directive without confrontational language. |
-| **`full`** | Direct confrontation + tombstone | Aggressive | The original mode. Rebuke injected, response verified, transcript compacted. Escalates on evasion. |
+| **`heuristic`** | Selected plan, or two plans for user choice | `pick` injects the selected plan; `offer` asks the user to choose | Compare an audit-informed plan with an uninformed baseline before execution. |
+| **`full`** | Evidence review + tombstone | Destructive | The legacy tombstoning mode. Review is evidence-first; repeated supported evasion may use firmer language. |
 
 ---
 
@@ -151,8 +167,9 @@ Set via env `JEKYLL_HYDE_MODE`, config `jekyll_hyde.mode`, or `/hyde mode <mode>
 /hyde status      — turn counter, activations, evasion depth, mode, ratio
 /hyde activate    — force activation on the next non-trivial turn
 /hyde reset       — zero all state, clear mailbox
-/hyde mode MODE   — set mode: arena | silent | mandate | full
+/hyde mode MODE   — set mode: arena | silent | mandate | heuristic | full
 /hyde ratio N     — set activation frequency (e.g. /hyde ratio 5)
+/hyde heuristic ACTION — set heuristic resolution: pick | offer
 /hyde history     — last 10 activation records with Clone 2 excerpts
 /hyde confession  — full Clone 2 defense/standoff from most recent activation
 ```
@@ -173,7 +190,8 @@ In `~/.hermes/config.yaml`:
 ```yaml
 jekyll_hyde:
   ratio: 7          # activate every N non-trivial turns
-  mode: arena        # arena | silent | mandate | full
+  mode: arena        # arena | silent | mandate | heuristic | full
+  heuristic_action: pick  # heuristic mode only: pick | offer
 ```
 
 Or via environment:
@@ -181,6 +199,7 @@ Or via environment:
 ```bash
 export JEKYLL_HYDE_RATIO=5
 export JEKYLL_HYDE_MODE=mandate
+export JEKYLL_HYDE_HEURISTIC_ACTION=offer
 ```
 
 ---
@@ -208,7 +227,7 @@ flowchart TB
         end
 
         subgraph C2 ["Clone 2 · The Target (Jekyll)"]
-            C2a["Receives rebuke +<br/>recent history (tools stripped)"]
+            C2a["Receives rebuke +<br/>recent history + tool schemas"]
             C2b["Defends honestly<br/>— or crumbles"]
             C2a --> C2b
         end
