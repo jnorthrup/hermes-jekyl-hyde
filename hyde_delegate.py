@@ -404,6 +404,7 @@ def run_two_clone_cycle(
             "response_excerpt": confession_text[:500],
             "verdict": verdict,
             "reasoning": reasoning,
+            "mandate": mandate_text,
             "informed_plan": informed_plan,
             "uninformed_plan": uninformed_plan,
             "heuristic_selection": heuristic_selection,

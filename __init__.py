@@ -311,6 +311,7 @@ def _on_hyde_command(raw_args: str = "") -> str:
         rebuke = latest.get("rebuke") or latest.get("rebuke_excerpt", "")
         response = latest.get("model_response") or latest.get("response_excerpt", "")
         reasoning = latest.get("reasoning", "")
+        mandate = latest.get("mandate", "")
         informed_plan = latest.get("informed_plan", "")
         uninformed_plan = latest.get("uninformed_plan", "")
         heuristic_selection = latest.get("heuristic_selection", "")
@@ -322,11 +323,12 @@ def _on_hyde_command(raw_args: str = "") -> str:
                 f"[Uninformed baseline plan]\n{uninformed_plan}\n\n"
                 f"Heuristic selection: {heuristic_selection} ({heuristic_reasoning})\n"
             )
+        mandate_audit = f"\n[Mandate]\n{mandate}\n" if mandate else ""
         return (
             f"--- LATEST TWO-CLONE AUDIT (#{num} [{verdict}]) ---\n"
             f"[Clone 1 — Auditor Rebuke]\n{rebuke}\n\n"
             f"[Clone 2 — Technical Standoff / Confession]\n{response}\n\n"
-            f"Auditor Evaluation: {reasoning}\n{heuristic_audit}"
+            f"Auditor Evaluation: {reasoning}\n{mandate_audit}{heuristic_audit}"
             f"-------------------------------------------------"
         )
 

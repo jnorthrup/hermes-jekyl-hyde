@@ -160,6 +160,7 @@ Set via env `JEKYLL_HYDE_MODE`, config `jekyll_hyde.mode`, or `/hyde mode <mode>
 /hyde mode MODE   — set mode: arena | silent | mandate | heuristic | full
 /hyde ratio N     — set activation frequency (e.g. /hyde ratio 5)
 /hyde heuristic ACTION — set heuristic resolution: pick | offer
+/hyde audit       — latest full audit, including its mandate when generated
 /hyde history     — last 10 activation records with Clone 2 excerpts
 /hyde confession  — full Clone 2 defense/standoff from most recent activation
 ```
