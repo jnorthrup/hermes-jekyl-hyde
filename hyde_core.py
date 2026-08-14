@@ -28,11 +28,16 @@ _LOCK = threading.Lock()
 
 # Trivial prompts don't count toward the ratio. Hyde only activates on
 # turns where the model actually had room to sandbag — real work, not
-# "thanks" or "ok" or slash commands.
+# "thanks" or "ok", slash commands, or automated/goal continuation loops.
 _TRIVIAL_PATTERNS = [
     re.compile(r"^\s*(thanks|thank you|ok|okay|k|sure|yep|no|yes|done|cool|nice|got it|hi|hello|hey)\s*[.!]?\s*$", re.IGNORECASE),
     re.compile(r"^\s*/\w+.*$", re.IGNORECASE),  # slash commands (e.g. /hyde status, /reset, /model)
     re.compile(r"^\s*Review the conversation above.*", re.IGNORECASE),  # background skill/memory review turns
+    re.compile(r"^\s*\[Continuing toward your standing goal.*", re.IGNORECASE),  # autonomous goal continuation turns
+    re.compile(r"^\s*\[Earlier conversation digest.*", re.IGNORECASE),  # digest compaction header
+    re.compile(r"^\s*\[PRIOR CONTEXT.*", re.IGNORECASE),  # compaction prior context
+    re.compile(r"^\s*\[CONTEXT COMPACTION.*", re.IGNORECASE),  # compaction summary
+    re.compile(r"^\s*\[System Note:.*", re.IGNORECASE),  # synthetic gateway/system notes
 ]
 _TRIVIAL_MAX_LEN = 12
 
@@ -338,22 +343,14 @@ def get_ratio() -> int:
     return 7
 
 
-VALID_MODES = {"arena", "silent", "mandate", "heuristic", "full"}
+VALID_MODES = {"arena", "silent", "mandate", "heuristic", "full", "old-testament", "old_testament", "wrath"}
 DEFAULT_MODE = "arena"
 VALID_HEURISTIC_ACTIONS = {"pick", "offer"}
 DEFAULT_HEURISTIC_ACTION = "pick"
 
 
 def get_mode() -> str:
-    """Read the operating mode from config or env. Default 'arena'.
-
-    Modes:
-      - 'arena': presents both Clone 1 (rebuke) and Clone 2 (technical standoff/confession) directly in context.
-      - 'silent': 100% out-of-band shadow audit, zero injection into main turn.
-      - 'mandate': extracts a concise, non-confrontational work directive from Clone 2's confession.
-      - 'heuristic': compares an audit-informed plan with an uninformed baseline plan.
-      - 'full': aggressive confrontation injected into main turn with tombstoning.
-    """
+    """Read the operating mode from config or env. Default 'arena'."""
     env_val = os.environ.get("JEKYLL_HYDE_MODE")
     if env_val and env_val.lower().strip() in VALID_MODES:
         return env_val.lower().strip()
@@ -396,14 +393,14 @@ def should_activate(
     """Check if Hyde should activate on this turn.
 
     Increments the turn counter for non-trivial turns, returns True if
-    the counter hits the ratio or force_activate is set, AND the agent has actually
-    taken at least one turn / inspected files in the session.
+    the counter hits the ratio or force_activate is set.
     """
     if is_trivial(user_message):
         return False
 
-    # Do not activate if the agent hasn't even taken a turn or looked at files yet in this session
-    if conversation_history is not None and not getattr(state, "force_activate", False):
+    mode = get_mode()
+    # In audit modes, don't audit before the agent has even spoken once in this session
+    if mode in ("arena", "silent", "mandate", "full", "old-testament", "old_testament", "wrath") and conversation_history is not None and not getattr(state, "force_activate", False):
         has_assistant_turn = any(
             isinstance(m, dict) and m.get("role") == "assistant"
             for m in conversation_history

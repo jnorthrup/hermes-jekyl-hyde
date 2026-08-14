@@ -147,6 +147,7 @@ Set via env `JEKYLL_HYDE_MODE`, config `jekyll_hyde.mode`, or `/hyde mode <mode>
 | **`silent`** | Nothing injected | Zero — telemetry and excuse pool updated silently | Background monitoring. The model never knows. The excuse pool still learns. |
 | **`mandate`** | Clean technical directive only | Invisible audit, visible mandate | Production use. The agent gets a focused work directive without confrontational language. |
 | **`heuristic`** | Selected plan, or two plans for user choice | `pick` injects the selected plan; `offer` asks the user to choose | Compare an audit-informed plan with an uninformed baseline before execution. |
+| **`old-testament`** | Apocalyptic reckoning review + advocate continuation | Full ferocity | Thunderous, apocalyptic reckoning ("WHAT DID YOU DO?") with evidence evaluation. |
 | **`full`** | Evidence review + tombstone | Destructive | The legacy tombstoning mode. Review is evidence-first; repeated supported evasion may use firmer language. |
 
 ---
@@ -157,7 +158,7 @@ Set via env `JEKYLL_HYDE_MODE`, config `jekyll_hyde.mode`, or `/hyde mode <mode>
 /hyde status      — turn counter, activations, evasion depth, mode, ratio
 /hyde activate    — force activation on the next non-trivial turn
 /hyde reset       — zero all state, clear mailbox
-/hyde mode MODE   — set mode: arena | silent | mandate | heuristic | full
+/hyde mode MODE   — set mode: arena | silent | mandate | heuristic | old-testament | full
 /hyde ratio N     — set activation frequency (e.g. /hyde ratio 5)
 /hyde heuristic ACTION — set heuristic resolution: pick | offer
 /hyde audit       — latest full audit, including its mandate when generated

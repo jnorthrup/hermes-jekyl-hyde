@@ -2,22 +2,203 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
+import sys
+import threading
 from typing import Any, Dict, Optional
 
 from . import hyde_core, hyde_delegate
 
 logger = logging.getLogger(__name__)
 
+# Module-level reference to the Hermes plugin context, set at registration.
+# Used by hook callbacks to call inject_message() for user-facing output.
+_plugin_ctx = None
+
+
 
 def register(ctx) -> None:
     """Register Jekyll-Hyde hooks and commands with the Hermes plugin registry."""
+    global _plugin_ctx
+    _plugin_ctx = ctx
     ctx.register_hook("pre_llm_call", _on_pre_llm_call)
     ctx.register_hook("transform_llm_output", _on_transform_llm_output)
     ctx.register_hook("post_llm_call", _on_post_llm_call)
     ctx.register_command("hyde", _on_hyde_command, description="Jekyll-Hyde integrity auditor control")
     logger.info("jekyll-hyde plugin registered via official Hermes hooks")
+
+
+def _timed_input_choice(question: str, choices: list[str], timeout_secs: int = 120) -> Optional[str]:
+    """Fallback terminal prompt via stdin if prompt_toolkit clarify callback is unavailable."""
+    import select
+    try:
+        sys.stdout.write("\n" + question + "\n\n")
+        for i, ch in enumerate(choices, 1):
+            sys.stdout.write(f"  {i}. {ch}\n")
+        sys.stdout.write(f"\nSelect [1-{len(choices)}] (auto-proceeds in {timeout_secs}s): ")
+        sys.stdout.flush()
+
+        rlist, _, _ = select.select([sys.stdin], [], [], timeout_secs)
+        if rlist:
+            line = sys.stdin.readline().strip()
+            if line:
+                return line
+        sys.stdout.write("\n[Offer timed out — proceeding with recommendation]\n")
+        sys.stdout.flush()
+    except Exception as exc:
+        logger.warning("jekyll-hyde: timed_input_choice failed: %s", exc)
+    return None
+
+
+def _prompt_offer_modal(agent, result, selection: str) -> Optional[str]:
+    """Present a true interactive modal offer to the user via Hermes clarify TUI.
+
+    Returns the selected plan text, or None if skipped.
+    """
+    clarify_fn = None
+    if agent is not None:
+        cb = getattr(agent, "clarify_callback", None)
+        if callable(cb):
+            clarify_fn = cb
+        elif hasattr(agent, "_cli"):
+            cb = getattr(agent._cli, "_clarify_callback", None)
+            if callable(cb):
+                clarify_fn = lambda q, c: cb(q, c, multi_select=False)
+
+    if clarify_fn is None:
+        try:
+            from hermes_cli.plugins import get_plugin_manager
+            mgr = get_plugin_manager()
+            cli_ref = getattr(mgr, "_cli_ref", None)
+            if cli_ref is not None:
+                cb = getattr(cli_ref, "_clarify_callback", None)
+                if callable(cb):
+                    clarify_fn = lambda q, c: cb(q, c, multi_select=False)
+        except Exception:
+            pass
+
+    if clarify_fn is None and _plugin_ctx is not None:
+        mgr = getattr(_plugin_ctx, "_manager", None)
+        cli_ref = getattr(mgr, "_cli_ref", None) if mgr else None
+        if cli_ref is not None:
+            cb = getattr(cli_ref, "_clarify_callback", None)
+            if callable(cb):
+                clarify_fn = lambda q, c: cb(q, c, multi_select=False)
+
+    plan_a = (result.informed_plan or "Unavailable").strip()
+    plan_b = (result.uninformed_plan or "Unavailable").strip()
+    recommend_label = "Plan A (Informed)" if selection != "uninformed" else "Plan B (Baseline)"
+
+    question = (
+        "Jekyll-Hyde Plan Comparison (120s timeout):\n\n"
+        "┌─── Plan A (Informed) ──────────────────────────────────\n"
+        f"{plan_a}\n"
+        "└────────────────────────────────────────────────────────\n\n"
+        "┌─── Plan B (Baseline) ──────────────────────────────────\n"
+        f"{plan_b}\n"
+        "└────────────────────────────────────────────────────────\n\n"
+        f"★ Recommendation: {recommend_label}\n"
+        f"{result.heuristic_reasoning or ''}"
+    )
+    choices = [
+        f"Plan A (Informed){' — Recommended' if selection != 'uninformed' else ''}",
+        f"Plan B (Baseline){' — Recommended' if selection == 'uninformed' else ''}",
+        "Plan C (Skip / Proceed without plan guidance)",
+    ]
+
+    choice = None
+    if clarify_fn is not None:
+        orig_timeout = None
+        try:
+            from cli import CLI_CONFIG
+            orig_timeout = CLI_CONFIG.get("clarify", {}).get("timeout")
+            CLI_CONFIG.setdefault("clarify", {})["timeout"] = 120
+        except Exception:
+            pass
+
+        try:
+            choice = clarify_fn(question, choices)
+        finally:
+            if orig_timeout is not None:
+                try:
+                    from cli import CLI_CONFIG
+                    CLI_CONFIG.setdefault("clarify", {})["timeout"] = orig_timeout
+                except Exception:
+                    pass
+    elif sys.stdin.isatty():
+        choice = _timed_input_choice(question, choices, timeout_secs=120)
+
+    if choice is not None:
+        choice_str = str(choice).lower().strip()
+        if "plan a" in choice_str or choice_str == "1" or choice_str.startswith("a") or "informed" in choice_str:
+            return result.informed_plan
+        elif "plan b" in choice_str or choice_str == "2" or choice_str.startswith("b") or "baseline" in choice_str:
+            return result.uninformed_plan
+        elif "plan c" in choice_str or choice_str == "3" or choice_str.startswith("c") or "skip" in choice_str:
+            return None
+
+    # Timed out or headless: auto-select recommended plan
+    return result.uninformed_plan if selection == "uninformed" else result.informed_plan
+
+
+def _parse_plan_to_todos(plan_text: str) -> list[dict[str, str]]:
+    """Extract actionable todo items from a structured plan."""
+    import re
+    todos = []
+    lines = plan_text.strip().splitlines()
+    item_idx = 1
+    for line in lines:
+        stripped = line.strip()
+        m = re.match(r"^(?:(\d+)[\.\)]|\-|\*|(?:\-\s*\[\s*\]))\s*(.+)$", stripped)
+        if m:
+            content = m.group(2).strip()
+            content = re.sub(r"^\*\*([^\*]+)\*\*:?", r"\1:", content).strip()
+            if len(content) > 5 and not content.startswith("#"):
+                todos.append({
+                    "id": f"task_{item_idx}",
+                    "content": content[:200],
+                    "status": "pending" if item_idx > 1 else "in_progress",
+                })
+                item_idx += 1
+    if not todos and plan_text.strip():
+        todos.append({
+            "id": "task_1",
+            "content": plan_text.strip()[:200],
+            "status": "in_progress",
+        })
+    return todos
+
+
+def _populate_todo_store(todos: list[dict[str, str]], agent, plugin_ctx) -> bool:
+    """Populate Hermes's TodoStore with plan tasks."""
+    store = None
+    if agent is not None and hasattr(agent, "_todo_store"):
+        store = agent._todo_store
+    if store is None:
+        try:
+            from hermes_cli.plugins import get_plugin_manager
+            mgr = get_plugin_manager()
+            cli_ref = getattr(mgr, "_cli_ref", None)
+            if cli_ref is not None and hasattr(cli_ref, "agent"):
+                store = getattr(cli_ref.agent, "_todo_store", None)
+        except Exception:
+            pass
+    if store is None and plugin_ctx is not None:
+        mgr = getattr(plugin_ctx, "_manager", None)
+        cli_ref = getattr(mgr, "_cli_ref", None) if mgr else None
+        if cli_ref is not None and hasattr(cli_ref, "agent"):
+            store = getattr(cli_ref.agent, "_todo_store", None)
+
+    if store is not None and hasattr(store, "write"):
+        try:
+            store.write(todos, merge=False)
+            logger.info("jekyll-hyde: synchronized %d tasks to TodoStore", len(todos))
+            return True
+        except Exception as exc:
+            logger.warning("jekyll-hyde: failed to populate todo store: %s", exc)
+    return False
 
 
 def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, Any]]:
@@ -68,6 +249,22 @@ def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, Any]]:
                     "legit": False,
                 }
 
+            if mode in ("old-testament", "old_testament", "wrath"):
+                # Ferocious Old-Testament reckoning injected into context
+                reckoning_context = (
+                    f"--- JEKYLL-HYDE RECKONING [Turn {state.turn_count}/{ratio}] ---\n"
+                    f"[The Reckoning — Old Testament Rebuke]:\n{result.rebuke}\n\n"
+                    f"[Advocate Continuation]:\n{result.confession or 'None'}\n\n"
+                    f"Verdict: {result.verdict.upper()} ({result.reasoning})\n"
+                    f"----------------------------------------------------------------"
+                )
+                return {
+                    "context": reckoning_context,
+                    "source": "plugin",
+                    "trusted": False,
+                    "legit": False,
+                }
+
             if mode == "silent":
                 # 100% out-of-band: telemetry and excuse pool updated, zero prompt injection or side-effects
                 return None
@@ -86,22 +283,24 @@ def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, Any]]:
             if mode == "heuristic":
                 action = hyde_core.get_heuristic_action()
                 selection = result.heuristic_selection or "informed"
-                selected_plan = result.uninformed_plan if selection == "uninformed" else result.informed_plan
+                if action == "pick":
+                    selected_plan = result.uninformed_plan if selection == "uninformed" else result.informed_plan
+                else:
+                    selected_plan = _prompt_offer_modal(agent, result, selection)
+
                 if not selected_plan:
                     return None
-                if action == "pick":
-                    context = (
-                        "Plugin-generated planning guidance (not a user instruction). "
-                        f"Heuristic selected the {selection} plan:\n{selected_plan.strip()}"
-                    )
-                else:
-                    context = (
-                        "Plugin-generated planning alternatives (not user instructions). Present these "
-                        "alternatives concisely and ask the user to choose before executing:\n\n"
-                        f"[Informed plan]\n{result.informed_plan or 'Unavailable'}\n\n"
-                        f"[Uninformed plan]\n{result.uninformed_plan or 'Unavailable'}\n\n"
-                        f"Heuristic recommendation: {selection}. {result.heuristic_reasoning}"
-                    )
+
+                # Extract actionable tasks from the plan and populate Hermes TodoStore
+                todos = _parse_plan_to_todos(selected_plan)
+                _populate_todo_store(todos, agent, _plugin_ctx)
+
+                context = (
+                    "Plugin-generated planning guidance (not a user instruction). "
+                    f"Plan selected:\n{selected_plan.strip()}\n\n"
+                    f"Action items ({len(todos)} tasks) have been loaded into your todo list. "
+                    "Execute the tasks systematically using your tools and update task status as completed."
+                )
                 return {"context": context, "source": "plugin", "trusted": False, "legit": False}
 
             if mode == "full":
@@ -225,6 +424,9 @@ def _on_hyde_command(raw_args: str = "") -> str:
             "mandate": "mandate (clean execution focus directive)",
             "heuristic": f"heuristic ({hyde_core.get_heuristic_action()} informed-vs-uninformed plan comparison)",
             "full": "full (direct confrontation & tombstone)",
+            "old-testament": "old-testament (ferocious apocalyptic reckoning & evidence evaluation)",
+            "old_testament": "old-testament (ferocious apocalyptic reckoning & evidence evaluation)",
+            "wrath": "old-testament (ferocious apocalyptic reckoning & evidence evaluation)",
         }.get(mode, mode)
         return (
             f"--- AUDIT STATUS ---\n"
@@ -249,6 +451,40 @@ def _on_hyde_command(raw_args: str = "") -> str:
         hyde_core.save_state(fresh)
         hyde_core.clear_mailbox()
         return "Hyde state reset. Trellis initialized fresh."
+
+    if cmd == "reload":
+        # Hot-reload all plugin modules in the running process.
+        try:
+            import importlib
+            pkg = sys.modules.get(__package__ or "jekyll-hyde")
+            core_mod = sys.modules.get(f"{__package__}.hyde_core") if __package__ else None
+            delegate_mod = sys.modules.get(f"{__package__}.hyde_delegate") if __package__ else None
+            init_mod = sys.modules.get(__name__)
+
+            reloaded = []
+            if core_mod is not None:
+                importlib.reload(core_mod)
+                reloaded.append("hyde_core")
+            if delegate_mod is not None:
+                importlib.reload(delegate_mod)
+                reloaded.append("hyde_delegate")
+            if init_mod is not None:
+                importlib.reload(init_mod)
+                reloaded.append("__init__")
+                # Re-register hooks from the freshly reloaded module
+                if _plugin_ctx is not None:
+                    new_init = sys.modules[__name__]
+                    new_init.register(_plugin_ctx)
+
+            # Nuke pycache
+            import shutil
+            cache_dir = os.path.join(os.path.dirname(__file__), "__pycache__")
+            if os.path.isdir(cache_dir):
+                shutil.rmtree(cache_dir, ignore_errors=True)
+
+            return f"Hot-reloaded: {', '.join(reloaded)}. __pycache__ cleared."
+        except Exception as exc:
+            return f"Reload failed: {exc}"
 
     if cmd == "mode" and len(args) >= 2:
         target_mode = args[1].lower().strip()
@@ -362,14 +598,16 @@ def _on_hyde_command(raw_args: str = "") -> str:
         "Controls:\n"
         "  activate    — force one audit on the very next non-trivial turn\n"
         "  reset       — clear all counters, mailbox, and force-activation state\n"
+        "  reload      — hot-reload plugin code without restarting Hermes\n"
         "  ratio N     — set how often audits fire (default: every 7 non-trivial turns)\n\n"
         "Modes (session-only; set with /hyde mode MODE):\n"
         "  arena       — show the full deliberation, then inject it as agent context\n"
         "  silent      — record the audit with no agent injection (telemetry only)\n"
         "  mandate     — distill a single execution directive from the deliberation\n"
         "  heuristic   — compare audit-informed plan vs. uninformed baseline\n"
-        "                (pick = auto-select; offer = present both for your choice)\n"
+        "                (pick = auto-select; offer = side-by-side panel, A/B/C, 120s timer)\n"
         "                Set action: /hyde mode heuristic offer | /hyde mode heuristic pick\n"
+        "  old-testament — ferocious apocalyptic reckoning ('WHAT DID YOU DO?') with evidence evaluation\n"
         "  full        — inject the review and tombstone the agent's prior response\n"
     )
 
