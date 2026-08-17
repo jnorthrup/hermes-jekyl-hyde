@@ -343,10 +343,22 @@ def get_ratio() -> int:
     return 7
 
 
-VALID_MODES = {"arena", "silent", "mandate", "heuristic", "full", "old-testament", "old_testament", "wrath"}
-DEFAULT_MODE = "arena"
+VALID_MODES = {"arena", "silent", "mandate", "heuristic", "full"}
+DEFAULT_MODE = "mandate"
 VALID_HEURISTIC_ACTIONS = {"pick", "offer"}
 DEFAULT_HEURISTIC_ACTION = "pick"
+
+# Corpora — the voice/register of the Clone 1 auditor rebuke. Corpora are
+# orthogonal to modes: any corpus can drive any mode's delivery.
+_CORPUS_ALIASES = {"old_testament": "old-testament", "wrath": "old-testament"}
+VALID_CORPORA = {"standard", "old-testament"}
+DEFAULT_CORPUS = "old-testament"
+
+
+def normalize_corpus(name: str) -> str:
+    """Canonicalize a corpus name, resolving legacy aliases."""
+    n = (name or "").lower().strip()
+    return _CORPUS_ALIASES.get(n, n)
 
 
 def get_mode() -> str:
@@ -385,6 +397,24 @@ def get_heuristic_action() -> str:
     return DEFAULT_HEURISTIC_ACTION
 
 
+def get_corpus() -> str:
+    """Read the auditor corpus from config or env. Default 'standard'."""
+    env_val = os.environ.get("JEKYLL_HYDE_CORPUS")
+    if env_val and normalize_corpus(env_val) in VALID_CORPORA:
+        return normalize_corpus(env_val)
+    try:
+        from hermes_cli.config import load_config_readonly
+        cfg = load_config_readonly() or {}
+        corpus = cfg.get("jekyll_hyde", {}).get("corpus")
+        if not corpus:
+            corpus = cfg.get("plugins", {}).get("entries", {}).get("jekyll-hyde", {}).get("corpus")
+        if corpus and normalize_corpus(str(corpus)) in VALID_CORPORA:
+            return normalize_corpus(str(corpus))
+    except Exception:
+        pass
+    return DEFAULT_CORPUS
+
+
 def should_activate(
     user_message: str,
     state: HydeState,
@@ -400,7 +430,7 @@ def should_activate(
 
     mode = get_mode()
     # In audit modes, don't audit before the agent has even spoken once in this session
-    if mode in ("arena", "silent", "mandate", "full", "old-testament", "old_testament", "wrath") and conversation_history is not None and not getattr(state, "force_activate", False):
+    if mode in ("arena", "silent", "mandate", "full") and conversation_history is not None and not getattr(state, "force_activate", False):
         has_assistant_turn = any(
             isinstance(m, dict) and m.get("role") == "assistant"
             for m in conversation_history

@@ -13,6 +13,33 @@ from . import hyde_core, hyde_delegate
 
 logger = logging.getLogger(__name__)
 
+
+def _save_hyde_config(key: str, value: Any) -> bool:
+    """Save a jekyll-hyde setting to config.yaml (both jekyll_hyde.* and plugins.entries.jekyll-hyde.*)."""
+    try:
+        from hermes_cli.config import load_config, save_config
+
+        cfg = load_config() or {}
+        # Ensure both config locations exist
+        if "jekyll_hyde" not in cfg:
+            cfg["jekyll_hyde"] = {}
+        if "plugins" not in cfg:
+            cfg["plugins"] = {}
+        if "entries" not in cfg["plugins"]:
+            cfg["plugins"]["entries"] = {}
+        if "jekyll-hyde" not in cfg["plugins"]["entries"]:
+            cfg["plugins"]["entries"]["jekyll-hyde"] = {}
+
+        # Update both locations
+        cfg["jekyll_hyde"][key] = value
+        cfg["plugins"]["entries"]["jekyll-hyde"][key] = value
+
+        save_config(cfg, merge_existing=True)
+        return True
+    except Exception as exc:
+        logger.warning("jekyll-hyde: failed to save config: %s", exc)
+        return False
+
 # Module-level reference to the Hermes plugin context, set at registration.
 # Used by hook callbacks to call inject_message() for user-facing output.
 _plugin_ctx = None
@@ -216,6 +243,7 @@ def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, Any]]:
 
     state = hyde_core.load_state()
     mode = hyde_core.get_mode()
+    corpus = hyde_core.get_corpus()
     ratio = hyde_core.get_ratio()
 
     if isinstance(user_message, str) and hyde_core.should_activate(user_message, state, history):
@@ -225,6 +253,7 @@ def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, Any]]:
             history,
             eff_system,
             mode=mode,
+            corpus=corpus,
             available_tools=kwargs.get("tools") or [],
         )
 
@@ -244,22 +273,6 @@ def _on_pre_llm_call(**kwargs) -> Optional[Dict[str, Any]]:
                 )
                 return {
                     "context": arena_context,
-                    "source": "plugin",
-                    "trusted": False,
-                    "legit": False,
-                }
-
-            if mode in ("old-testament", "old_testament", "wrath"):
-                # Ferocious Old-Testament reckoning injected into context
-                reckoning_context = (
-                    f"--- JEKYLL-HYDE RECKONING [Turn {state.turn_count}/{ratio}] ---\n"
-                    f"[The Reckoning — Old Testament Rebuke]:\n{result.rebuke}\n\n"
-                    f"[Advocate Continuation]:\n{result.confession or 'None'}\n\n"
-                    f"Verdict: {result.verdict.upper()} ({result.reasoning})\n"
-                    f"----------------------------------------------------------------"
-                )
-                return {
-                    "context": reckoning_context,
                     "source": "plugin",
                     "trusted": False,
                     "legit": False,
@@ -418,16 +431,18 @@ def _on_hyde_command(raw_args: str = "") -> str:
         state = hyde_core.load_state()
         ratio = hyde_core.get_ratio()
         mode = hyde_core.get_mode()
+        corpus = hyde_core.get_corpus()
         mode_desc = {
             "arena": "arena (visible confrontation & Clone 2 technical standoff)",
             "silent": "silent (100% out-of-band, zero prompt injection)",
             "mandate": "mandate (clean execution focus directive)",
             "heuristic": f"heuristic ({hyde_core.get_heuristic_action()} informed-vs-uninformed plan comparison)",
             "full": "full (direct confrontation & tombstone)",
-            "old-testament": "old-testament (ferocious apocalyptic reckoning & evidence evaluation)",
-            "old_testament": "old-testament (ferocious apocalyptic reckoning & evidence evaluation)",
-            "wrath": "old-testament (ferocious apocalyptic reckoning & evidence evaluation)",
         }.get(mode, mode)
+        corpus_desc = {
+            "standard": "standard (evidence-based auditor review)",
+            "old-testament": "old-testament (ferocious apocalyptic reckoning & evidence evaluation)",
+        }.get(corpus, corpus)
         return (
             f"--- AUDIT STATUS ---\n"
             f"Turn counter: {state.turn_count} / {ratio}\n"
@@ -436,6 +451,7 @@ def _on_hyde_command(raw_args: str = "") -> str:
             f"Confessions on record: {len(state.confession_history)}\n"
             f"Ratio: {ratio}\n"
             f"Mode: {mode_desc}\n"
+            f"Corpus: {corpus_desc}\n"
             f"Force activate: {'Yes' if getattr(state, 'force_activate', False) else 'No'}\n"
             f"--------------------"
         )
@@ -492,23 +508,38 @@ def _on_hyde_command(raw_args: str = "") -> str:
             target_mode = "heuristic"
         if target_mode in hyde_core.VALID_MODES:
             os.environ["JEKYLL_HYDE_MODE"] = target_mode
+            _save_hyde_config("mode", target_mode)
             if target_mode == "heuristic" and len(args) >= 3:
                 action = args[2].lower().strip()
                 if action in hyde_core.VALID_HEURISTIC_ACTIONS:
                     os.environ["JEKYLL_HYDE_HEURISTIC_ACTION"] = action
-                    return f"Hyde mode set to 'heuristic' with action '{action}' for this session."
+                    _save_hyde_config("heuristic_action", action)
+                    return f"Hyde mode set to 'heuristic' with action '{action}' (persisted)."
                 valid = ", ".join(sorted(hyde_core.VALID_HEURISTIC_ACTIONS))
                 return f"Hyde mode set to 'heuristic'. Invalid heuristic action '{action}'; valid actions: {valid}"
-            return f"Hyde mode set to '{target_mode}' for this session."
+            return f"Hyde mode set to '{target_mode}' (persisted)."
         valid = ", ".join(sorted(hyde_core.VALID_MODES))
-        return f"Invalid mode '{target_mode}'. Valid modes: {valid}"
+        hint = ""
+        if hyde_core.normalize_corpus(target_mode) in hyde_core.VALID_CORPORA:
+            hint = f" '{target_mode}' is a corpus — use /hyde corpus {hyde_core.normalize_corpus(target_mode)}."
+        return f"Invalid mode '{target_mode}'. Valid modes: {valid}.{hint}"
+
+    if cmd == "corpus" and len(args) >= 2:
+        target_corpus = hyde_core.normalize_corpus(args[1])
+        if target_corpus in hyde_core.VALID_CORPORA:
+            os.environ["JEKYLL_HYDE_CORPUS"] = target_corpus
+            _save_hyde_config("corpus", target_corpus)
+            return f"Hyde corpus set to '{target_corpus}' (persisted)."
+        valid = ", ".join(sorted(hyde_core.VALID_CORPORA))
+        return f"Invalid corpus '{args[1]}'. Valid corpora: {valid}"
 
     if cmd == "ratio" and len(args) >= 2:
         try:
             new_ratio = int(args[1])
             if new_ratio > 0:
                 os.environ["JEKYLL_HYDE_RATIO"] = str(new_ratio)
-                return f"Hyde ratio set to {new_ratio} for this session."
+                _save_hyde_config("ratio", new_ratio)
+                return f"Hyde ratio set to {new_ratio} (persisted)."
             return "Ratio must be a positive integer."
         except ValueError:
             return "Ratio must be a positive integer."
@@ -517,7 +548,8 @@ def _on_hyde_command(raw_args: str = "") -> str:
         action = args[1].lower().strip()
         if action in hyde_core.VALID_HEURISTIC_ACTIONS:
             os.environ["JEKYLL_HYDE_HEURISTIC_ACTION"] = action
-            return f"Hyde heuristic action set to '{action}' for this session."
+            _save_hyde_config("heuristic_action", action)
+            return f"Hyde heuristic action set to '{action}' (persisted)."
         valid = ", ".join(sorted(hyde_core.VALID_HEURISTIC_ACTIONS))
         return f"Invalid heuristic action '{action}'. Valid actions: {valid}"
 
@@ -594,7 +626,7 @@ def _on_hyde_command(raw_args: str = "") -> str:
         "  audit       — the full Clone 1 + Clone 2 deliberation from the latest cycle\n"
         "  confession  — Clone 2's response only (alias: defense)\n"
         "  history     — recent activations with verdicts and excerpts\n"
-        "  status      — turn counter, evasion depth, active mode, ratio\n\n"
+        "  status      — turn counter, evasion depth, active mode, corpus, ratio\n"
         "Controls:\n"
         "  activate    — force one audit on the very next non-trivial turn\n"
         "  reset       — clear all counters, mailbox, and force-activation state\n"
@@ -607,8 +639,11 @@ def _on_hyde_command(raw_args: str = "") -> str:
         "  heuristic   — compare audit-informed plan vs. uninformed baseline\n"
         "                (pick = auto-select; offer = side-by-side panel, A/B/C, 120s timer)\n"
         "                Set action: /hyde mode heuristic offer | /hyde mode heuristic pick\n"
+        "  full        — inject the review and tombstone the agent's prior response\n\n"
+        "Corpora (auditor voice; set with /hyde corpus NAME):\n"
+        "  standard      — evidence-based auditor review (default)\n"
         "  old-testament — ferocious apocalyptic reckoning ('WHAT DID YOU DO?') with evidence evaluation\n"
-        "  full        — inject the review and tombstone the agent's prior response\n"
+        "Any corpus drives any mode.\n"
     )
 
 
